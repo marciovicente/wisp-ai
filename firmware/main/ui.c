@@ -51,22 +51,38 @@ static const char *NOME[FG_QTD] = {
 
 /* Alvos por estado. As medidas do olho são para o mascote em tamanho cheio;
  * com várias sessões elas são escaladas proporcionalmente. */
+/* Bocas. A curvatura e o que separa contentamento de aflicao. */
+typedef enum { BOCA_SORRISO, BOCA_SORRISAO, BOCA_PEQUENA, BOCA_O,
+               BOCA_RETA, BOCA_ONDA } boca_t;
+
 typedef struct {
     int16_t olho_alt, olho_dx, olho_dy;
     uint8_t respira;
     uint8_t orbita;      /* 0 = fagulha parada, 255 = órbita rápida */
     bool    interrog;
+    /* —— expressao ——
+     * sobrancelha: angulo em graus. Positivo levanta a ponta EXTERNA, que le
+     * como surpresa; negativo abaixa, que le como concentracao. Com
+     * `sob_invertida` quem sobe e a ponta INTERNA — e essa e a diferenca
+     * entre parecer bravo e parecer preocupado. */
+    int16_t sob_ang;
+    int16_t sob_dy;
+    bool    sob_invertida;
+    boca_t  boca;
+    int16_t olhar_x, olhar_y;   /* direcao da pupila, -100 a 100 */
+    bool    olhos_felizes;      /* arcos para cima, o sorriso que mora no olho */
 } alvo_t;
 
 static const alvo_t ALVO[FG_QTD] = {
-    [FG_OCIOSO]      = {40,  0,  -6,  6,  20, false},
-    [FG_TRABALHANDO] = {18,  0,   0,  4, 170, false},
-    [FG_FERRAMENTA]  = {14, -9,   8,  3, 255, false},
-    [FG_PERGUNTANDO] = {46,  0,  -9,  7,   0, true },
-    [FG_ESPERANDO]   = {50,  0, -10, 10,  60, false},
-    [FG_CONCLUIDO]   = {12,  0,  -2,  9,  40, false},
-    [FG_ERRO]        = {30,  0,  10,  3,  25, false},
-    [FG_SEM_REDE]    = { 6,  0,   0,  2,   0, false},
+    /*                 alt  dx   dy  resp orb interr | sob_ang dy inv | boca         olhar_x y | felizes */
+    [FG_OCIOSO]      = {40,  0,  -6,  6,  20, false,        0,  0, false, BOCA_SORRISO,   0,   0, false},
+    [FG_TRABALHANDO] = {36,  0,  -2,  4, 170, false,       -6,  4, false, BOCA_PEQUENA,  45, -50, false},
+    [FG_FERRAMENTA]  = {24, -4,   4,  3, 255, false,      -16, -5, false, BOCA_PEQUENA,   0,  15, false},
+    [FG_PERGUNTANDO] = {46,  0,  -9,  7,   0, true,        14, 10, false, BOCA_O,         0, -10, false},
+    [FG_ESPERANDO]   = {44,  0,  -8, 10,  60, false,       20,  8, false, BOCA_ONDA,      0,  10, false},
+    [FG_CONCLUIDO]   = {12,  0,  -2,  9,  40, false,        8,  6, false, BOCA_SORRISAO,  0,   0, true },
+    [FG_ERRO]        = {32,  0,   6,  3,  25, false,      -22,  2, true,  BOCA_ONDA,      0,  25, false},
+    [FG_SEM_REDE]    = { 8,  0,   0,  2,   0, false,        0, -3, false, BOCA_RETA,      0,   0, false},
 };
 
 /* ————————————————————————————————————————————————
@@ -74,6 +90,11 @@ static const alvo_t ALVO[FG_QTD] = {
  * ———————————————————————————————————————————————— */
 typedef struct {
     lv_obj_t *corpo, *olho[2], *fagulha, *detalhe, *projeto;
+    /* Rosto: o que estava faltando para os oito estados nao serem o mesmo
+     * boneco em oito cores. Olho vira BRANCO com pupila e brilho; sobrancelha
+     * e boca entram porque e nelas que a expressao mora. */
+    lv_obj_t *pupila[2], *brilho[2], *sobrancelha[2], *boca, *chama;
+    int16_t p_boca;      /* ultima boca desenhada, para nao redesenhar igual */
     fg_estado_t alvo, anterior;
     int16_t olho_alt, olho_dx, olho_dy;
     int16_t p_alt, p_dx, p_dy;          /* guardas: só redesenha se mudou */
@@ -242,8 +263,12 @@ static void aplicar_layout(int total)
     for (int i = 0; i < FG_MAX_SESSOES; i++) {
         mascote_t *m = &g_m[i];
         bool ativo = i < total;
-        lv_obj_t *objs[] = {m->corpo, m->fagulha, m->detalhe, m->projeto};
-        for (size_t k = 0; k < 4; k++) {
+        /* chama entra na lista: ela e IRMA do corpo, nao filha. Olhos e
+         * boca somem junto com o corpo por serem filhos; a chama nao,
+         * e ficaria pairando sozinha sobre o relogio. */
+        lv_obj_t *objs[] = {m->corpo, m->fagulha, m->detalhe,
+                            m->projeto, m->chama};
+        for (size_t k = 0; k < 5; k++) {
             if (ativo) lv_obj_remove_flag(objs[k], LV_OBJ_FLAG_HIDDEN);
             else       lv_obj_add_flag(objs[k], LV_OBJ_FLAG_HIDDEN);
         }
@@ -339,11 +364,88 @@ static void animar_um(mascote_t *m, uint32_t agora, bool sozinho)
 
     if (alt != m->p_alt || dx != m->p_dx || dy != m->p_dy) {
         m->p_alt = alt; m->p_dx = dx; m->p_dy = dy;
+
+        int16_t sep = 42 * esc / 236;
+        int16_t rp  = larg * 52 / 100;              /* pupila */
+        int16_t rb  = larg * 20 / 100;              /* brilho */
+        if (rp < 3) rp = 3;
+        if (rb < 2) rb = 2;
+
         for (int i = 0; i < 2; i++) {
             lv_obj_set_size(m->olho[i], larg, alt);
             lv_obj_align(m->olho[i], LV_ALIGN_CENTER,
-                         (i == 0 ? -40 : 40) * esc / 236 + dx, dy);
+                         (i == 0 ? -sep : sep) + dx, dy);
+
+            /* Pupila segue o olhar, presa dentro do branco. Olhar para cima e
+             * para o lado e o gesto universal de quem esta pensando. */
+            int16_t ox = A->olhar_x * (larg / 2 - rp / 2) / 100;
+            int16_t oy = A->olhar_y * (alt  / 2 - rp / 2) / 100;
+            lv_obj_set_size(m->pupila[i], rp, rp);
+            lv_obj_align(m->pupila[i], LV_ALIGN_CENTER, ox, oy);
+            lv_obj_set_style_opa(m->pupila[i],
+                                 alt > larg / 3 ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+
+            lv_obj_set_size(m->brilho[i], rb, rb);
+            lv_obj_align(m->brilho[i], LV_ALIGN_CENTER, -rp / 4, -rp / 4);
+
+            /* Sobrancelha. `externa` inverte o sinal do lado esquerdo para o
+             * angulo espelhar; com sob_invertida quem sobe e a ponta interna,
+             * e e so isso que separa bravo de preocupado. */
+            int16_t sl = 46 * esc / 236, sh = 8 * esc / 236;
+            if (sh < 2) sh = 2;
+            int externa = (i == 0) ? -1 : 1;
+            int giro = (A->sob_invertida ? -externa : externa) * A->sob_ang;
+            lv_obj_set_size(m->sobrancelha[i], sl, sh);
+            lv_obj_set_style_radius(m->sobrancelha[i], sh / 2, 0);
+            lv_obj_set_style_transform_pivot_x(m->sobrancelha[i], sl / 2, 0);
+            lv_obj_set_style_transform_pivot_y(m->sobrancelha[i], sh / 2, 0);
+            lv_obj_set_style_transform_rotation(m->sobrancelha[i], giro * 10, 0);
+            lv_obj_align(m->sobrancelha[i], LV_ALIGN_CENTER,
+                         (i == 0 ? -sep : sep) + dx,
+                         dy - alt / 2 - (16 - A->sob_dy) * esc / 236);
         }
+    }
+
+    /* —— boca ——
+     * Um arco so, reposicionado. Angulos do LVGL: 0 grau aponta para as 3
+     * horas e cresce no sentido horario, entao 90 e embaixo. Arco embaixo
+     * curva para cima e vira sorriso; arco em cima vira aflicao. */
+    if (m->alvo != m->p_boca) {
+        m->p_boca = m->alvo;
+        int16_t bd, bw, a1, a2;
+        switch (A->boca) {
+            case BOCA_SORRISAO: bd = 74; bw = 9; a1 = 35;  a2 = 145; break;
+            case BOCA_SORRISO:  bd = 62; bw = 7; a1 = 55;  a2 = 125; break;
+            case BOCA_PEQUENA:  bd = 44; bw = 6; a1 = 68;  a2 = 112; break;
+            case BOCA_O:        bd = 26; bw = 9; a1 = 0;   a2 = 359; break;
+            case BOCA_ONDA:     bd = 58; bw = 7; a1 = 235; a2 = 305; break;
+            default:            bd = 96; bw = 6; a1 = 82;  a2 = 98;  break;
+        }
+        int16_t dbd = bd * esc / 236, dbw = bw * esc / 236;
+        if (dbw < 2) dbw = 2;
+        lv_obj_set_size(m->boca, dbd, dbd);
+        lv_obj_set_style_arc_width(m->boca, dbw, LV_PART_MAIN);
+        lv_arc_set_bg_angles(m->boca, a1, a2);
+        /* A onda e um arco de cima: sobe o objeto para a curva cair onde a
+         * boca deve estar, em vez de ficar no meio do rosto. */
+        int16_t by = (A->boca == BOCA_ONDA ? 58 : 30) * esc / 236;
+        lv_obj_align(m->boca, LV_ALIGN_CENTER, 0, by);
+    }
+
+    /* Fagulha do topo: paira acima da cabeca e tremula. Morre no offline —
+     * sem o outro lado, nao ha o que arder. */
+    if (m->alvo == FG_SEM_REDE) {
+        lv_obj_add_flag(m->chama, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        int16_t cd = 16 * esc / 236;
+        if (cd < 4) cd = 4;
+        int16_t tremor = (int16_t)(sinf(agora / 90.0f) * (esc / 118));
+        vaga_t vc; vaga_de(g_qtd, (int)(m - g_m), &vc);
+        lv_obj_remove_flag(m->chama, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_size(m->chama, cd, cd * 3 / 2);
+        lv_obj_set_style_radius(m->chama, cd / 2, 0);
+        lv_obj_align(m->chama, LV_ALIGN_CENTER, vc.x + tremor,
+                     vc.y - esc / 2 - cd + respiro);
     }
 
     /* Fagulha: ângulo ACUMULADO e velocidade interpolada. Derivar de
@@ -459,12 +561,62 @@ static void criar_mascote(lv_obj_t *pai, mascote_t *m)
     so_decoracao(m->corpo);
 
     for (int i = 0; i < 2; i++) {
+        /* BRANCO do olho. Antes o olho inteiro era escuro — duas frestas num
+         * corpo redondo, que lia como focinho. Olho de verdade tem branco,
+         * pupila e um ponto de brilho; sem o brilho ele vira buraco. */
         m->olho[i] = lv_obj_create(m->corpo);
-        lv_obj_set_style_radius(m->olho[i], 12, 0);
+        lv_obj_set_style_radius(m->olho[i], LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_border_width(m->olho[i], 0, 0);
-        lv_obj_set_style_bg_color(m->olho[i], lv_color_make(22, 12, 8), 0);
+        lv_obj_set_style_bg_color(m->olho[i], lv_color_make(252, 250, 250), 0);
+        lv_obj_set_style_pad_all(m->olho[i], 0, 0);
         so_decoracao(m->olho[i]);
+
+        m->pupila[i] = lv_obj_create(m->olho[i]);
+        lv_obj_set_style_radius(m->pupila[i], LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_border_width(m->pupila[i], 0, 0);
+        lv_obj_set_style_bg_color(m->pupila[i], lv_color_make(26, 18, 24), 0);
+        lv_obj_set_style_pad_all(m->pupila[i], 0, 0);
+        so_decoracao(m->pupila[i]);
+
+        m->brilho[i] = lv_obj_create(m->pupila[i]);
+        lv_obj_set_style_radius(m->brilho[i], LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_border_width(m->brilho[i], 0, 0);
+        lv_obj_set_style_bg_color(m->brilho[i], lv_color_white(), 0);
+        lv_obj_set_style_pad_all(m->brilho[i], 0, 0);
+        so_decoracao(m->brilho[i]);
+
+        /* Sobrancelha: sozinha carrega mais expressao que todo o resto. */
+        m->sobrancelha[i] = lv_obj_create(m->corpo);
+        lv_obj_set_style_border_width(m->sobrancelha[i], 0, 0);
+        lv_obj_set_style_bg_color(m->sobrancelha[i], lv_color_make(40, 24, 22), 0);
+        lv_obj_set_style_bg_opa(m->sobrancelha[i], LV_OPA_70, 0);
+        lv_obj_set_style_pad_all(m->sobrancelha[i], 0, 0);
+        so_decoracao(m->sobrancelha[i]);
     }
+
+    /* Boca: UM arco serve para todas as formas. Voltado para baixo vira
+     * sorriso, para cima vira aflicao, fechado em 360 vira o "o" de surpresa.
+     * Sete widgets diferentes dariam o mesmo resultado com sete vezes mais
+     * objetos na tela — e objeto custa varredura. */
+    m->boca = lv_arc_create(m->corpo);
+    lv_obj_remove_style(m->boca, NULL, LV_PART_KNOB);
+    lv_obj_set_style_arc_width(m->boca, 0, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(m->boca, lv_color_make(40, 24, 22), LV_PART_MAIN);
+    lv_obj_set_style_arc_opa(m->boca, LV_OPA_80, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(m->boca, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(m->boca, 0, 0);
+    so_decoracao(m->boca);
+    m->p_boca = -1;
+
+    /* A fagulha que paira acima da cabeca — o que amarra o boneco ao nome. */
+    m->chama = lv_obj_create(pai);
+    lv_obj_set_style_radius(m->chama, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(m->chama, 0, 0);
+    lv_obj_set_style_bg_color(m->chama, lv_color_make(255, 214, 130), 0);
+    lv_obj_set_style_bg_grad_color(m->chama, lv_color_make(250, 140, 50), 0);
+    lv_obj_set_style_bg_grad_dir(m->chama, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_pad_all(m->chama, 0, 0);
+    so_decoracao(m->chama);
 
     m->fagulha = lv_obj_create(pai);
     lv_obj_set_size(m->fagulha, 14, 14);
@@ -630,9 +782,9 @@ void ui_atualizar(const fg_dados_t *d)
         }
         if (repouso) {
             for (int i = 0; i < FG_MAX_SESSOES; i++) {
-                lv_obj_t *o[] = {g_m[i].corpo, g_m[i].fagulha,
-                                 g_m[i].detalhe, g_m[i].projeto};
-                for (size_t k = 0; k < 4; k++) lv_obj_add_flag(o[k], LV_OBJ_FLAG_HIDDEN);
+                lv_obj_t *o[] = {g_m[i].corpo, g_m[i].fagulha, g_m[i].detalhe,
+                                 g_m[i].projeto, g_m[i].chama};
+                for (size_t k = 0; k < 5; k++) lv_obj_add_flag(o[k], LV_OBJ_FLAG_HIDDEN);
             }
             for (int k = 0; k < QTD_INTERROG; k++)
                 lv_obj_add_flag(g_interrog[k], LV_OBJ_FLAG_HIDDEN);

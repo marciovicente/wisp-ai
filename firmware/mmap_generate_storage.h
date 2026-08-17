@@ -14,15 +14,15 @@
 #include "esp_mmap_assets.h"
 
 #define MMAP_STORAGE_FILES           8
-#define MMAP_STORAGE_CHECKSUM        0x85B8
+#define MMAP_STORAGE_CHECKSUM        0x3974
 
 enum MMAP_STORAGE_LISTS {
-    MMAP_STORAGE_ASKING_PNG = 0,        /*!< asking.png */
-    MMAP_STORAGE_DONE_PNG = 1,        /*!< done.png */
-    MMAP_STORAGE_ERROR_PNG = 2,        /*!< error.png */
-    MMAP_STORAGE_IDLE_PNG = 3,        /*!< idle.png */
-    MMAP_STORAGE_OFFLINE_PNG = 4,        /*!< offline.png */
-    MMAP_STORAGE_TOOL_PNG = 5,        /*!< tool.png */
-    MMAP_STORAGE_WAITING_PNG = 6,        /*!< waiting.png */
-    MMAP_STORAGE_WORKING_PNG = 7,        /*!< working.png */
+    MMAP_STORAGE_ASKING_BIN = 0,        /*!< asking.bin */
+    MMAP_STORAGE_DONE_BIN = 1,        /*!< done.bin */
+    MMAP_STORAGE_ERROR_BIN = 2,        /*!< error.bin */
+    MMAP_STORAGE_IDLE_BIN = 3,        /*!< idle.bin */
+    MMAP_STORAGE_OFFLINE_BIN = 4,        /*!< offline.bin */
+    MMAP_STORAGE_TOOL_BIN = 5,        /*!< tool.bin */
+    MMAP_STORAGE_WAITING_BIN = 6,        /*!< waiting.bin */
+    MMAP_STORAGE_WORKING_BIN = 7,        /*!< working.bin */
 };

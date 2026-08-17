@@ -16,4 +16,7 @@ spiffs_create_partition_assets(
     "${CMAKE_CURRENT_SOURCE_DIR}/assets"
     FLASH_IN_PROJECT
     MMAP_FILE_SUPPORT_FORMAT ".png"
+    MMAP_SUPPORT_RAW 1
+    MMAP_RAW_FILE_FORMAT "true_color_alpha"
+    MMAP_RAW_COLOR_FORMAT "RGB565A8"
 )

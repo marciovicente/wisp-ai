@@ -17,9 +17,84 @@
 #include "esp_log.h"
 #include "lvgl.h"
 #include "bsp/esp-bsp.h"
+#include "esp_mmap_assets.h"
+#include "esp_lv_decoder.h"
 #include "ui.h"
 
 static const char *TAG = "ui";
+
+/* ————————————————————————————————————————————————
+ *  Mascotes de imagem, vindos da particao `storage`
+ *
+ *  Os PNG sao empacotados no build e ficam MAPEADOS na flash — o ponteiro
+ *  aponta direto para os bytes, sem copia para a RAM. Isso importa muito
+ *  aqui: a RAM interna e o recurso mais escasso desta placa, e ja chegou a
+ *  4,7KB de minimo historico.
+ *
+ *  O componente desta versao NAO gera o cabecalho mmap_generate_*.h, entao
+ *  `checksum` e `files` saem lidos do proprio binario (offsets 0x10 e 0x0C do
+ *  cabecalho de 32 bytes) e os assets sao acessados por indice, em ordem
+ *  alfabetica.
+ * ———————————————————————————————————————————————— */
+#define ASSETS_QTD      8
+#define ASSETS_CHECKSUM 14708
+
+/* Ordem alfabetica dos arquivos na particao, mapeada para os nossos estados. */
+static const int IDX[FG_QTD] = {
+    [FG_OCIOSO]      = 3,   /* idle    */
+    [FG_TRABALHANDO] = 7,   /* working */
+    [FG_FERRAMENTA]  = 5,   /* tool    */
+    [FG_PERGUNTANDO] = 0,   /* asking  */
+    [FG_ESPERANDO]   = 6,   /* waiting */
+    [FG_CONCLUIDO]   = 1,   /* done    */
+    [FG_ERRO]        = 2,   /* error   */
+    [FG_SEM_REDE]    = 4,   /* offline */
+};
+
+static mmap_assets_handle_t s_assets;
+static lv_image_dsc_t s_dsc[FG_QTD];
+static bool s_tem_fotos = false;
+
+static void carregar_fotos(void)
+{
+    esp_lv_decoder_handle_t dec = NULL;
+    if (esp_lv_decoder_init(&dec) != ESP_OK) {
+        ESP_LOGW(TAG, "decoder nao subiu — segue no vetor");
+        return;
+    }
+    const mmap_assets_config_t cfg = {
+        .partition_label = "storage",
+        .max_files = ASSETS_QTD,
+        .checksum = ASSETS_CHECKSUM,
+        .flags = {.mmap_enable = true},
+    };
+    if (mmap_assets_new(&cfg, &s_assets) != ESP_OK) {
+        ESP_LOGW(TAG, "particao de mascotes nao abriu — segue no vetor");
+        return;
+    }
+    for (int e = 0; e < FG_QTD; e++) {
+        int i = IDX[e];
+        const uint8_t *dados = mmap_assets_get_mem(s_assets, i);
+        int tam = mmap_assets_get_size(s_assets, i);
+        if (!dados || tam <= 0) return;
+        s_dsc[e].header.magic = LV_IMAGE_HEADER_MAGIC;
+        /* RGB565A8 CRU, convertido no build. Sem decodificacao: o LVGL le
+         * direto da flash mapeada.
+         *
+         * A primeira versao usava RAW_ALPHA, que decodifica PNG em tempo de
+         * execucao. Medido: FPS caiu de 62 para 1-7 e a RAM interna chegou a
+         * 12 bytes de minimo historico. Nesta placa nao ha folga para
+         * decodificar imagem — a conversao tem que acontecer antes. */
+        s_dsc[e].header.cf = LV_COLOR_FORMAT_RGB565A8;
+        s_dsc[e].header.w = 236;
+        s_dsc[e].header.h = 236;
+        s_dsc[e].header.stride = 236 * 2;
+        s_dsc[e].data = dados;
+        s_dsc[e].data_size = tam;
+    }
+    s_tem_fotos = true;
+    ESP_LOGI(TAG, "mascotes de imagem carregados (%d estados)", FG_QTD);
+}
 
 /* 16ms para acompanhar o refresh do LVGL (LV_DEF_REFR_PERIOD=15). Com 33ms a
  * fagulha só se movia em metade dos quadros e parecia travada. */
@@ -94,6 +169,7 @@ typedef struct {
      * boneco em oito cores. Olho vira BRANCO com pupila e brilho; sobrancelha
      * e boca entram porque e nelas que a expressao mora. */
     lv_obj_t *pupila[2], *brilho[2], *sobrancelha[2], *boca, *chama;
+    lv_obj_t *foto;          /* mascote de imagem; NULL = desenhado */
     int16_t p_boca, p_esc;   /* guardas do rosto: estado e escala */
     /* Pontos da sobrancelha. lv_line guarda o PONTEIRO, nao copia — se este
      * array sair de escopo, o LVGL desenha lixo. Por isso vive aqui. */
@@ -270,14 +346,25 @@ static void aplicar_layout(int total)
          * boca somem junto com o corpo por serem filhos; a chama nao,
          * e ficaria pairando sozinha sobre o relogio. */
         lv_obj_t *objs[] = {m->corpo, m->fagulha, m->detalhe,
-                            m->projeto, m->chama};
-        for (size_t k = 0; k < 5; k++) {
+                            m->projeto, m->chama, m->foto};
+        for (size_t k = 0; k < 6; k++) {
+            if (!objs[k]) continue;
             if (ativo) lv_obj_remove_flag(objs[k], LV_OBJ_FLAG_HIDDEN);
             else       lv_obj_add_flag(objs[k], LV_OBJ_FLAG_HIDDEN);
         }
         if (!ativo) continue;
 
         vaga_t v; vaga_de(total, i, &v);
+        /* Com foto, o boneco desenhado inteiro sai de cena. Deixar os dois
+         * visiveis nao daria um hibrido, daria olhos flutuando sobre a
+         * imagem. */
+        if (m->foto) {
+            lv_obj_t *desenho[] = {m->corpo, m->fagulha, m->chama};
+            for (size_t k = 0; k < 3; k++)
+                lv_obj_add_flag(desenho[k], LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_size(m->foto, v.d, v.d);
+            lv_obj_align(m->foto, LV_ALIGN_CENTER, v.x, v.y);
+        }
         m->d = v.d;
         lv_obj_set_size(m->corpo, v.d, v.d);
         lv_obj_set_style_radius(m->corpo, v.d * 42 / 100, 0);
@@ -323,6 +410,26 @@ static void ao_refrescar(lv_event_t *e) { (void) e; g_refrescos++; }
 static void animar_um(mascote_t *m, uint32_t agora, bool sozinho)
 {
     const alvo_t *A = &ALVO[m->alvo];
+
+    /* Com foto, o quadro a quadro nao existe.
+     *
+     * A respiracao a 60fps foi feita para um boneco DESENHADO: era ela que
+     * dava vida a formas geometricas. Uma imagem ja e o personagem inteiro, e
+     * so precisa mudar quando o estado muda.
+     *
+     * Manter o laco rodando custava caro: cada quadro reinvalidava uma imagem
+     * de 236x236 com alfa, que atravessa o buffer de 8 linhas em 30 tiras.
+     * Medido: 6 FPS e 1,6KB de RAM interna no minimo. Parando o laco, a tela
+     * simplesmente fica quieta ate ter noticia nova — que e o comportamento
+     * certo para um indicador de status. */
+    if (m->foto) {
+        if (m->p_boca != m->alvo || m->p_esc != (int16_t) m->d) {
+            m->p_boca = m->alvo;
+            m->p_esc  = m->d;
+            lv_image_set_src(m->foto, &s_dsc[m->alvo]);
+        }
+        return;
+    }
     const cor_t *C = &COR[m->alvo];
     /* Escala das medidas do olho em relação ao mascote cheio (236px). */
     const int esc = m->d;
@@ -397,6 +504,7 @@ static void animar_um(mascote_t *m, uint32_t agora, bool sozinho)
     if (m->p_boca != m->alvo || m->p_esc != esc) {
         m->p_boca = m->alvo;
         m->p_esc  = esc;
+
 
         int16_t sep = 42 * esc / 236;
         int16_t lg  = 25 * esc / 236;
@@ -644,6 +752,13 @@ static void criar_mascote(lv_obj_t *pai, mascote_t *m)
     so_decoracao(m->boca);
     m->p_boca = -1;
 
+    /* Mascote de imagem. Fica ACIMA de tudo e, quando existe, o desenho
+     * inteiro e escondido — nao ha meio-termo entre os dois. */
+    if (s_tem_fotos) {
+        m->foto = lv_image_create(pai);
+        so_decoracao(m->foto);
+    }
+
     /* A fagulha que paira acima da cabeca — o que amarra o boneco ao nome. */
     m->chama = lv_obj_create(pai);
     lv_obj_set_style_radius(m->chama, LV_RADIUS_CIRCLE, 0);
@@ -701,6 +816,7 @@ void ui_criar(void)
     }
     criar_painel(g_tile_painel);
 
+    carregar_fotos();
     for (int i = 0; i < FG_MAX_SESSOES; i++) criar_mascote(tela, &g_m[i]);
 
     for (int i = 0; i < QTD_INTERROG; i++) {
@@ -818,9 +934,14 @@ void ui_atualizar(const fg_dados_t *d)
         }
         if (repouso) {
             for (int i = 0; i < FG_MAX_SESSOES; i++) {
+                /* A foto entra aqui pelo mesmo motivo que a chama entrou:
+                 * e IRMA do corpo, nao filha, entao nao some por heranca.
+                 * Sem isto ela fica pairando sobre o relogio — armadilha que
+                 * ja pegou o rodape e a chama antes dela. */
                 lv_obj_t *o[] = {g_m[i].corpo, g_m[i].fagulha, g_m[i].detalhe,
-                                 g_m[i].projeto, g_m[i].chama};
-                for (size_t k = 0; k < 5; k++) lv_obj_add_flag(o[k], LV_OBJ_FLAG_HIDDEN);
+                                 g_m[i].projeto, g_m[i].chama, g_m[i].foto};
+                for (size_t k = 0; k < 6; k++)
+                    if (o[k]) lv_obj_add_flag(o[k], LV_OBJ_FLAG_HIDDEN);
             }
             for (int k = 0; k < QTD_INTERROG; k++)
                 lv_obj_add_flag(g_interrog[k], LV_OBJ_FLAG_HIDDEN);

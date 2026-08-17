@@ -368,8 +368,11 @@ static void aplicar_layout(int total)
          * visiveis nao daria um hibrido, daria olhos flutuando sobre a
          * imagem. */
         if (m->foto) {
-            lv_obj_t *desenho[] = {m->corpo, m->fagulha, m->chama};
-            for (size_t k = 0; k < 3; k++)
+            /* Some TUDO que era desenhado, inclusive a chama — ela pertencia
+             * a fagulha organica e sobre um computador nao quer dizer nada. */
+            lv_obj_t *desenho[] = {m->corpo, m->fagulha, m->chama,
+                                   m->braco[0], m->braco[1]};
+            for (size_t k = 0; k < 5; k++)
                 lv_obj_add_flag(desenho[k], LV_OBJ_FLAG_HIDDEN);
             lv_obj_set_size(m->foto, v.d, v.d);
             lv_obj_align(m->foto, LV_ALIGN_CENTER, v.x, v.y);
@@ -941,7 +944,7 @@ void ui_criar(void)
     }
     criar_painel(g_tile_painel);
 
-    /* carregar_fotos();  <- desenhado supera imagem aqui; ver commit */
+    carregar_fotos();
     for (int i = 0; i < FG_MAX_SESSOES; i++) criar_mascote(tela, &g_m[i]);
 
     for (int i = 0; i < QTD_INTERROG; i++) {
@@ -1024,7 +1027,20 @@ void ui_atualizar(const fg_dados_t *d)
      * tela vazia que existiria entre o mascote sumir e o relógio entrar. */
     bool sem_sessao = (n == 0);
     bool repouso = sem_sessao && d->hora[0];
-    if (sem_sessao) n = 1;   /* daqui para baixo, n é só o layout */
+
+    /* UM mascote, sempre — mesmo com varias sessoes.
+     *
+     * Dividir a tela em dois ou quatro parecia obvio e nao funciona: a
+     * imagem encolhe para caber na vaga e sai CORTADA, porque o PNG tem
+     * proporcao propria e a vaga nao. E quatro bonecos espremidos sao
+     * quatro caras identicas em miniatura — nenhuma legivel de longe, que
+     * e a unica coisa que esta tela precisa fazer.
+     *
+     * A sessao mais urgente aparece, e o rodape diz quantas outras
+     * existem. Mesma decisao do flutuante no Mac, pelo mesmo motivo. */
+    int outras = n - 1;
+    if (outras < 0) outras = 0;
+    n = 1;
 
     bsp_display_lock(-1);
 
@@ -1086,8 +1102,21 @@ void ui_atualizar(const fg_dados_t *d)
          * pegaria lixo — quem chama passa um global que guarda a última
          * sessão vista, e a tela exibiria um fantasma de algo já encerrado. */
         static const fg_sessao_t VAZIA = {.estado = FG_OCIOSO};
+        /* Prioridade: quem PAROU esperando voce fala primeiro. Trabalhando
+         * pode aguardar; travado, nao. */
+        static const fg_estado_t URGENCIA[] = {
+            FG_PERGUNTANDO, FG_ESPERANDO, FG_ERRO,
+            FG_FERRAMENTA, FG_TRABALHANDO, FG_CONCLUIDO,
+        };
+        int esc = 0;
+        for (size_t u = 0; u < sizeof(URGENCIA)/sizeof(URGENCIA[0]); u++) {
+            bool achou = false;
+            for (int k = 0; k < d->qtd_sessoes; k++)
+                if (d->sessoes[k].estado == URGENCIA[u]) { esc = k; achou = true; break; }
+            if (achou) break;
+        }
         for (int i = 0; i < n; i++) {
-            const fg_sessao_t *s = sem_sessao ? &VAZIA : &d->sessoes[i];
+            const fg_sessao_t *s = sem_sessao ? &VAZIA : &d->sessoes[esc];
             mascote_t *m = &g_m[i];
             m->alvo = s->estado;
 
@@ -1096,9 +1125,15 @@ void ui_atualizar(const fg_dados_t *d)
                 snprintf(m->ult_detalhe, sizeof(m->ult_detalhe), "%s", txt);
                 lv_label_set_text(m->detalhe, txt);
             }
-            if (strncmp(s->projeto, m->ult_projeto, sizeof(m->ult_projeto)) != 0) {
-                snprintf(m->ult_projeto, sizeof(m->ult_projeto), "%s", s->projeto);
-                lv_label_set_text(m->projeto, s->projeto);
+            /* %.19s: o limite tem que ser EXPLICITO. Sem a precisao, o gcc
+             * so ve dois campos de tamanho aberto indo para o mesmo buffer e
+             * recusa com format-truncation, que aqui e erro. */
+            char pj[28];
+            if (outras > 0) snprintf(pj, sizeof(pj), "%.19s  +%d", s->projeto, outras);
+            else            snprintf(pj, sizeof(pj), "%.27s", s->projeto);
+            if (strncmp(pj, m->ult_projeto, sizeof(m->ult_projeto)) != 0) {
+                snprintf(m->ult_projeto, sizeof(m->ult_projeto), "%s", pj);
+                lv_label_set_text(m->projeto, pj);
             }
         }
     } else {

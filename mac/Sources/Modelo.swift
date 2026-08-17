@@ -78,6 +78,19 @@ struct AppEstado: Decodable {
     let rede_aberta: Bool?
     let janelas: Janelas?
 
+    /// O estado que o mascote grande mostra: o mais urgente entre as sessões.
+    ///
+    /// A ordem não é estética — é por quem depende de quem. "Te perguntou" e
+    /// "precisa de você" vêm primeiro porque são os dois casos em que o Claude
+    /// parou e está esperando VOCÊ. Trabalhando pode esperar; travado, não.
+    var estadoDominante: EstadoMascote {
+        for st in ["asking", "waiting", "error", "tool", "working", "done"]
+        where sessoes.contains(where: { $0.st == st }) {
+            return EstadoMascote(st)
+        }
+        return .ocioso
+    }
+
     /// A placa só conta como conectada se falou com o bridge há pouco.
     /// Ela consulta a cada 600ms; 10s de silêncio já é ausência.
     var placaViva: Bool { placa_age_s >= 0 && placa_age_s <= 10 }

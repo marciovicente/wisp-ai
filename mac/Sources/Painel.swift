@@ -69,9 +69,9 @@ struct LinhaSessao: View {
     let s: Sessao
     var body: some View {
         HStack(spacing: 7) {
-            Circle()
-                .fill(Paleta.estado(s.cor))
-                .frame(width: 7, height: 7)
+            // Um mascote por sessão, igual à placa. Bolinha colorida exigia
+            // decorar o código de cores; o boneco você lê direto.
+            Mascote(estado: EstadoMascote(s.st), lado: 20)
             Text(s.pj.isEmpty ? "—" : s.pj)
                 .font(.system(size: 11, weight: .medium))
                 .lineLimit(1)
@@ -121,18 +121,28 @@ struct Painel: View {
 
     // MARK: - blocos
 
+    /// O mascote é a primeira coisa do painel de propósito: o estado das suas
+    /// sessões deve ser legível antes de qualquer número, e num relance.
     private var topo: some View {
-        HStack(spacing: 7) {
-            Circle()
-                .fill(bridge.estado.vivo
-                      ? Paleta.estado("concluido") : Color.secondary.opacity(0.5))
-                .frame(width: 8, height: 8)
-            Text("Fagulha").font(.system(size: 13, weight: .semibold))
+        HStack(spacing: 10) {
+            Mascote(estado: bridge.estado.vivo
+                    ? (bridge.dados?.estadoDominante ?? .ocioso) : .offline,
+                    lado: 42)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Fagulha").font(.system(size: 13, weight: .semibold))
+                Text(bridge.estado.vivo
+                     ? (bridge.dados?.estadoDominante ?? .ocioso).rotulo
+                     : bridge.estado.descricao)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
             Spacer()
-            Text(bridge.estado.descricao)
-                .font(.system(size: 10))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+            if let n = bridge.dados?.sessoes.count, n > 1 {
+                Text("\(n) sessões")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+            }
         }
     }
 

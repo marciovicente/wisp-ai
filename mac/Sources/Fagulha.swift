@@ -15,7 +15,10 @@ import SwiftUI
 /// `dns-sd` filhos junto, anunciando um bridge que você acha que fechou.
 final class Delegado: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ nota: Notification) {
-        MainActor.assumeIsolated { Bridge.compartilhado.parar() }
+        MainActor.assumeIsolated {
+            Flutuante.compartilhado.guardarPosicao()
+            Bridge.compartilhado.parar()
+        }
     }
 }
 

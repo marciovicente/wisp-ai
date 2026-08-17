@@ -278,6 +278,13 @@ struct Painel: View {
             .toggleStyle(.checkbox)
             .onChange(of: abrirNoLogin) { _, novo in aplicarLogin(novo) }
 
+            Toggle(isOn: $bridge.flutuante) {
+                Text("Mascote na área de trabalho").font(.system(size: 11))
+            }
+            .toggleStyle(.checkbox)
+            .help("Deixa os mascotes soltos na tela, sempre visíveis. "
+                  + "Arraste para posicionar.")
+
             Toggle(isOn: $bridge.buscarLimites) {
                 Text("Buscar limites reais").font(.system(size: 11))
             }

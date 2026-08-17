@@ -64,6 +64,17 @@ final class Bridge: ObservableObject {
         }
     }
 
+    /// Mascote solto na área de trabalho, à la Masko. Ligado por padrão:
+    /// é o ponto do projeto — um boneco que você vê sem precisar clicar.
+    @Published var flutuante: Bool = UserDefaults.standard
+        .object(forKey: "flutuante") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(flutuante, forKey: "flutuante")
+            flutuante ? Flutuante.compartilhado.mostrar(self)
+                      : Flutuante.compartilhado.esconder()
+        }
+    }
+
     /// Mesmo intervalo que o Claude Code usa no cache dele. Buscar mais que
     /// isso não traz número novo, só gasta requisição.
     private static let intervaloLimites: TimeInterval = 300
@@ -95,6 +106,7 @@ final class Bridge: ObservableObject {
             if await responde() {
                 estado = .adotado
                 comecarConsulta()
+                if flutuante { Flutuante.compartilhado.mostrar(self) }
                 return
             }
             subirProcesso()
@@ -134,6 +146,7 @@ final class Bridge: ObservableObject {
             proc = p
             estado = .rodando
             comecarConsulta()
+            if flutuante { Flutuante.compartilhado.mostrar(self) }
         } catch {
             estado = .falhou(error.localizedDescription)
         }
@@ -253,6 +266,8 @@ final class Bridge: ObservableObject {
             let (raw, _) = try await URLSession.shared.data(for: req)
             dados = try JSONDecoder().decode(AppEstado.self, from: raw)
             erroConsulta = nil
+            // O número de sessões muda a largura do boneco flutuante.
+            if flutuante { Flutuante.compartilhado.ajustar() }
         } catch {
             erroConsulta = error.localizedDescription
         }

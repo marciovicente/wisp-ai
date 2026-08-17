@@ -37,7 +37,7 @@ static const char *TAG = "ui";
  *  alfabetica.
  * ———————————————————————————————————————————————— */
 #define ASSETS_QTD      8
-#define ASSETS_CHECKSUM 14708
+#define ASSETS_CHECKSUM 30780
 
 /* Ordem alfabetica dos arquivos na particao, mapeada para os nossos estados. */
 static const int IDX[FG_QTD] = {

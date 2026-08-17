@@ -89,8 +89,14 @@ for n in ESTADOS {
 }
 guard !recortes.isEmpty else { exit(1) }
 
-// A referência é o MAIOR personagem: encolher preserva detalhe, ampliar borra.
-let alturaMax = recortes.map { $0.2.height }.max()!
+// A referência é a MEDIANA, não o máximo.
+//
+// Com o maximo, um unico arquivo fora do padrao arrastava o conjunto inteiro:
+// bastou uma geracao vir com zoom para os outros sete encolherem ate virar
+// miniatura. Medido, e foi assim que um conjunto bom virou um conjunto ruim.
+// A mediana ignora o outlier em vez de obedece-lo.
+let ordenadas = recortes.map { $0.2.height }.sorted()
+let alturaMax = ordenadas[ordenadas.count / 2]
 let alvo = Double(LADO) * (1 - MARGEM * 2)
 let escalaComum = alvo / Double(alturaMax)
 print("\n  altura de referência: \(Int(alturaMax))px  ->  escala \(String(format: "%.3f", escalaComum))")

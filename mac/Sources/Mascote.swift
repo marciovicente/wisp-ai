@@ -164,13 +164,21 @@ struct Mascote: View {
     let estado: EstadoMascote
     var lado: CGFloat = 64
 
+    @ViewBuilder
     var body: some View {
-        TimelineView(.animation) { ctx in
-            let t = ctx.date.timeIntervalSinceReferenceDate
-            Canvas { g, tam in desenhar(&g, tam, t) }
-                .frame(width: lado * FOLGA, height: lado * FOLGA)
+        // Arte do usuário tem precedência. O vetor é o padrão de fábrica, não
+        // o caminho principal — e continua sendo a rede de segurança quando
+        // falta algum estado.
+        if let img = Sprites.imagem(estado) {
+            MascoteSprite(estado: estado, imagem: img, lado: lado * FOLGA)
+        } else {
+            TimelineView(.animation) { ctx in
+                let t = ctx.date.timeIntervalSinceReferenceDate
+                Canvas { g, tam in desenhar(&g, tam, t) }
+                    .frame(width: lado * FOLGA, height: lado * FOLGA)
+            }
+            .accessibilityLabel("mascote: \(estado.rotulo)")
         }
-        .accessibilityLabel("mascote: \(estado.rotulo)")
     }
 
     // MARK: - silhueta

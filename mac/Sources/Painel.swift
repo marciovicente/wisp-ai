@@ -91,6 +91,7 @@ struct Painel: View {
     @ObservedObject var bridge: Bridge
     @State private var abrirNoLogin = SMAppService.mainApp.status == .enabled
     @State private var erroLogin: String?
+    @State private var personagem = Sprites.escolhido
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -277,6 +278,15 @@ struct Painel: View {
             }
             .toggleStyle(.checkbox)
             .onChange(of: abrirNoLogin) { _, novo in aplicarLogin(novo) }
+
+            if !Sprites.disponiveis().isEmpty {
+                Picker("Personagem", selection: $personagem) {
+                    Text("Fagulha (vetor)").tag("")
+                    ForEach(Sprites.disponiveis(), id: \.self) { Text($0).tag($0) }
+                }
+                .font(.system(size: 11))
+                .onChange(of: personagem) { _, novo in Sprites.escolhido = novo }
+            }
 
             Toggle(isOn: $bridge.flutuante) {
                 Text("Mascote na área de trabalho").font(.system(size: 11))

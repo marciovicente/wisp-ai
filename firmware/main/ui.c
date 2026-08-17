@@ -94,7 +94,10 @@ typedef struct {
      * boneco em oito cores. Olho vira BRANCO com pupila e brilho; sobrancelha
      * e boca entram porque e nelas que a expressao mora. */
     lv_obj_t *pupila[2], *brilho[2], *sobrancelha[2], *boca, *chama;
-    int16_t p_boca;      /* ultima boca desenhada, para nao redesenhar igual */
+    int16_t p_boca, p_esc;   /* guardas do rosto: estado e escala */
+    /* Pontos da sobrancelha. lv_line guarda o PONTEIRO, nao copia — se este
+     * array sair de escopo, o LVGL desenha lixo. Por isso vive aqui. */
+    lv_point_precise_t sob_pts[2][2];
     fg_estado_t alvo, anterior;
     int16_t olho_alt, olho_dx, olho_dy;
     int16_t p_alt, p_dx, p_dy;          /* guardas: só redesenha se mudou */
@@ -365,54 +368,76 @@ static void animar_um(mascote_t *m, uint32_t agora, bool sozinho)
     if (alt != m->p_alt || dx != m->p_dx || dy != m->p_dy) {
         m->p_alt = alt; m->p_dx = dx; m->p_dy = dy;
 
+        /* SO o branco do olho muda por quadro.
+         *
+         * Esta guarda dispara quase todo quadro, porque `alt` acompanha a
+         * respiracao. Na primeira versao do rosto eu coloquei pupila,
+         * sobrancelha e chama aqui dentro — e as sobras voltaram na hora.
+         * Objeto girado reposicionado 60 vezes por segundo, em modo parcial
+         * com buffer de 16 linhas, deixa rastro: a invalidacao da posicao
+         * antiga nao cobre o que a rotacao desenhou fora da caixa.
+         *
+         * O comentario no topo deste arquivo ja dizia isso, e eu passei por
+         * cima dele. Fica registrado. */
         int16_t sep = 42 * esc / 236;
-        int16_t rp  = larg * 52 / 100;              /* pupila */
-        int16_t rb  = larg * 20 / 100;              /* brilho */
-        if (rp < 3) rp = 3;
-        if (rb < 2) rb = 2;
-
         for (int i = 0; i < 2; i++) {
             lv_obj_set_size(m->olho[i], larg, alt);
             lv_obj_align(m->olho[i], LV_ALIGN_CENTER,
                          (i == 0 ? -sep : sep) + dx, dy);
-
-            /* Pupila segue o olhar, presa dentro do branco. Olhar para cima e
-             * para o lado e o gesto universal de quem esta pensando. */
-            int16_t ox = A->olhar_x * (larg / 2 - rp / 2) / 100;
-            int16_t oy = A->olhar_y * (alt  / 2 - rp / 2) / 100;
-            lv_obj_set_size(m->pupila[i], rp, rp);
-            lv_obj_align(m->pupila[i], LV_ALIGN_CENTER, ox, oy);
+            /* A pupila some quando o olho fecha, senao vaza pela palpebra. */
             lv_obj_set_style_opa(m->pupila[i],
                                  alt > larg / 3 ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+        }
+    }
 
+    /* —— rosto: so muda quando o ESTADO ou a ESCALA mudam ——
+     * Nada aqui precisa acompanhar a respiracao. Sobrancelha e boca sao
+     * expressao, e expressao muda quando o Claude muda de estado, nao 60
+     * vezes por segundo. */
+    if (m->p_boca != m->alvo || m->p_esc != esc) {
+        m->p_boca = m->alvo;
+        m->p_esc  = esc;
+
+        int16_t sep = 42 * esc / 236;
+        int16_t lg  = 25 * esc / 236;
+        int16_t rp  = lg * 52 / 100, rb = lg * 20 / 100;
+        if (rp < 3) rp = 3;
+        if (rb < 2) rb = 2;
+
+        for (int i = 0; i < 2; i++) {
+            int16_t ox = A->olhar_x * (lg / 3) / 100;
+            int16_t oy = A->olhar_y * (lg / 3) / 100;
+            lv_obj_set_size(m->pupila[i], rp, rp);
+            lv_obj_align(m->pupila[i], LV_ALIGN_CENTER, ox, oy);
             lv_obj_set_size(m->brilho[i], rb, rb);
             lv_obj_align(m->brilho[i], LV_ALIGN_CENTER, -rp / 4, -rp / 4);
 
-            /* Sobrancelha. `externa` inverte o sinal do lado esquerdo para o
-             * angulo espelhar; com sob_invertida quem sobe e a ponta interna,
-             * e e so isso que separa bravo de preocupado. */
+            /* A inclinacao vira diferenca de altura entre as duas pontas.
+             * `externa` espelha o lado esquerdo; com sob_invertida quem sobe
+             * e a ponta INTERNA — e e so isso que separa bravo de
+             * preocupado. */
             int16_t sl = 46 * esc / 236, sh = 8 * esc / 236;
             if (sh < 2) sh = 2;
             int externa = (i == 0) ? -1 : 1;
             int giro = (A->sob_invertida ? -externa : externa) * A->sob_ang;
-            lv_obj_set_size(m->sobrancelha[i], sl, sh);
-            lv_obj_set_style_radius(m->sobrancelha[i], sh / 2, 0);
-            lv_obj_set_style_transform_pivot_x(m->sobrancelha[i], sl / 2, 0);
-            lv_obj_set_style_transform_pivot_y(m->sobrancelha[i], sh / 2, 0);
-            lv_obj_set_style_transform_rotation(m->sobrancelha[i], giro * 10, 0);
+            int16_t queda = (int16_t)(sl * giro / 90);   /* aprox. de tan */
+            m->sob_pts[i][0].x = 0;
+            m->sob_pts[i][0].y = sh + queda / 2;
+            m->sob_pts[i][1].x = sl;
+            m->sob_pts[i][1].y = sh - queda / 2;
+            lv_obj_set_style_line_width(m->sobrancelha[i], sh, 0);
+            lv_line_set_points(m->sobrancelha[i], m->sob_pts[i], 2);
             lv_obj_align(m->sobrancelha[i], LV_ALIGN_CENTER,
-                         (i == 0 ? -sep : sep) + dx,
-                         dy - alt / 2 - (16 - A->sob_dy) * esc / 236);
+                         (i == 0 ? -sep : sep),
+                         -(A->olho_alt / 2) - (18 - A->sob_dy) * esc / 236);
         }
-    }
+
+        int16_t bd, bw, a1, a2;
 
     /* —— boca ——
      * Um arco so, reposicionado. Angulos do LVGL: 0 grau aponta para as 3
      * horas e cresce no sentido horario, entao 90 e embaixo. Arco embaixo
      * curva para cima e vira sorriso; arco em cima vira aflicao. */
-    if (m->alvo != m->p_boca) {
-        m->p_boca = m->alvo;
-        int16_t bd, bw, a1, a2;
         switch (A->boca) {
             case BOCA_SORRISAO: bd = 74; bw = 9; a1 = 35;  a2 = 145; break;
             case BOCA_SORRISO:  bd = 62; bw = 7; a1 = 55;  a2 = 125; break;
@@ -437,15 +462,17 @@ static void animar_um(mascote_t *m, uint32_t agora, bool sozinho)
     if (m->alvo == FG_SEM_REDE) {
         lv_obj_add_flag(m->chama, LV_OBJ_FLAG_HIDDEN);
     } else {
+        /* Parada de proposito. Tremular era mover um objeto sobre o fundo a
+         * cada quadro — mais uma fonte de rastro, pelo mesmo motivo das
+         * sobrancelhas. Quem se mexe aqui e a fagulha em orbita, que ja da
+         * o sinal de movimento. */
         int16_t cd = 16 * esc / 236;
         if (cd < 4) cd = 4;
-        int16_t tremor = (int16_t)(sinf(agora / 90.0f) * (esc / 118));
         vaga_t vc; vaga_de(g_qtd, (int)(m - g_m), &vc);
         lv_obj_remove_flag(m->chama, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_size(m->chama, cd, cd * 3 / 2);
         lv_obj_set_style_radius(m->chama, cd / 2, 0);
-        lv_obj_align(m->chama, LV_ALIGN_CENTER, vc.x + tremor,
-                     vc.y - esc / 2 - cd + respiro);
+        lv_obj_align(m->chama, LV_ALIGN_CENTER, vc.x, vc.y - esc / 2 - cd);
     }
 
     /* Fagulha: ângulo ACUMULADO e velocidade interpolada. Derivar de
@@ -585,12 +612,21 @@ static void criar_mascote(lv_obj_t *pai, mascote_t *m)
         lv_obj_set_style_pad_all(m->brilho[i], 0, 0);
         so_decoracao(m->brilho[i]);
 
-        /* Sobrancelha: sozinha carrega mais expressao que todo o resto. */
-        m->sobrancelha[i] = lv_obj_create(m->corpo);
-        lv_obj_set_style_border_width(m->sobrancelha[i], 0, 0);
-        lv_obj_set_style_bg_color(m->sobrancelha[i], lv_color_make(40, 24, 22), 0);
-        lv_obj_set_style_bg_opa(m->sobrancelha[i], LV_OPA_70, 0);
-        lv_obj_set_style_pad_all(m->sobrancelha[i], 0, 0);
+        /* Sobrancelha como LINHA, nao como retangulo girado.
+         *
+         * A primeira versao usava transform_rotation, e isso custou caro: no
+         * LVGL 9 qualquer objeto transformado e renderizado num buffer de
+         * CAMADA temporario. Oito sobrancelhas = oito camadas disputando a
+         * RAM interna, que aqui e o recurso mais escasso da placa. O
+         * resultado foi `Failed to allocate priv TX buffer` e o desenho
+         * falhando de vez — que na tela aparece como coisa sobre coisa,
+         * porque o pixel velho nunca e coberto.
+         *
+         * Uma linha de dois pontos ja nasce inclinada. Zero camada. */
+        m->sobrancelha[i] = lv_line_create(m->corpo);
+        lv_obj_set_style_line_color(m->sobrancelha[i], lv_color_make(40, 24, 22), 0);
+        lv_obj_set_style_line_opa(m->sobrancelha[i], LV_OPA_80, 0);
+        lv_obj_set_style_line_rounded(m->sobrancelha[i], true, 0);
         so_decoracao(m->sobrancelha[i]);
     }
 

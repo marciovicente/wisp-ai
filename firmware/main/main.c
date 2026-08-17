@@ -63,9 +63,21 @@ static esp_lcd_touch_handle_t s_toque = NULL;    /* idem: gira junto com a tela 
  *  a tela volta a desenhar com a rede ligada.
  * ———————————————————————————————————————————————— */
 
-/* 16 é o valor medido como estável: 66fps, zero erro de DMA, WiFi de pé.
- * Testado 32 (FPS irregular, erros voltaram) e 60 (WiFi sem RAM, boot loop). */
-#define ALTURA_BUFFER 16
+/* 8 linhas.
+ *
+ * Era 16, medido estável quando o mascote era um corpo com dois olhos. Com o
+ * rosto novo — pupilas, brilhos, sobrancelhas, boca e chama, oito objetos a
+ * mais por mascote e até quatro mascotes — a RAM interna livre caiu e o
+ * buffer de rebote do SPI passou a falhar: 15KB pedidos por flush contra
+ * ~23KB livres e fragmentados. `Failed to allocate priv TX buffer`, e o
+ * desenho simplesmente não acontece. Na tela isso aparece como uma coisa
+ * sobre a outra, porque o pixel velho nunca é coberto — é fácil confundir
+ * com bug de invalidação, e foi o que eu fiz por um tempo.
+ *
+ * Com 8 o rebote cai para 7,7KB, que cabe com folga. Custa mais flushes por
+ * quadro; em troca o desenho volta a acontecer sempre. Desenho lento é
+ * visível, desenho que falha é indistinguível de corrupção. */
+#define ALTURA_BUFFER 8
 
 /* O CO5300 exige áreas com início par e fim ímpar. Idêntico ao rounder do BSP.
  *
@@ -116,9 +128,21 @@ static lv_display_t *iniciar_display(void)
             .hor_res               = BSP_LCD_H_RES,
             .ver_res               = BSP_LCD_V_RES,
             .buffer_height         = ALTURA_BUFFER,
-            .use_psram             = true,
+            /* Buffer na RAM INTERNA, não na PSRAM.
+             *
+             * Com ele na PSRAM o driver SPI precisa copiar cada flush para um
+             * buffer de rebote em RAM interna, alocado NA HORA. Sob a pressão
+             * do rosto novo essa alocação passou a falhar em ~5% dos flushes
+             * (`Failed to allocate priv TX buffer`), e flush que falha deixa
+             * o pixel velho na tela — indistinguível de corrupção.
+             *
+             * Aqui o buffer nasce onde o DMA já pode ler: 480*8*2 = 7,7KB,
+             * uma vez, no boot. Ou cabe e nunca mais falha, ou não sobe e a
+             * gente sabe na hora. Buffer único pelo mesmo motivo — dois
+             * dobrariam o custo fixo do recurso mais escasso da placa. */
+            .use_psram             = false,
             .enable_ppa_accel      = false,
-            .require_double_buffer = true,
+            .require_double_buffer = false,
         },
         .tear_avoid_mode = cfg.tear_avoid_mode,
     };

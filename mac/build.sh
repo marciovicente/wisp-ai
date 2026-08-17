@@ -45,8 +45,19 @@ done
 # Assinatura ad-hoc: sem ela o macOS trata o app como danificado depois da
 # primeira cópia. Não substitui uma assinatura de desenvolvedor, mas basta
 # pra rodar na sua própria máquina.
-echo "==> assinando (ad-hoc)"
-codesign --force --sign - --timestamp=none "$APP" 2>&1 | sed 's/^/    /' || true
+# Assinatura ad-hoc deriva do CONTEÚDO do binário: muda a cada recompilação,
+# e como o macOS amarra a permissão do chaveiro à assinatura, cada build vira
+# "outro app" e o "Always Allow" anterior perde a validade. Com uma identidade
+# própria a assinatura deriva do CERTIFICADO e fica estável entre builds.
+# Crie a sua com ./mac/criar-identidade.sh — é local e de graça.
+IDENT="Fagulha Dev"
+if security find-identity -v -p codesigning 2>/dev/null | grep -q "$IDENT"; then
+    echo "==> assinando como '$IDENT'"
+    codesign --force --sign "$IDENT" --timestamp=none "$APP" 2>&1 | sed 's/^/    /' || true
+else
+    echo "==> assinando (ad-hoc — o chaveiro vai perguntar a cada build)"
+    codesign --force --sign - --timestamp=none "$APP" 2>&1 | sed 's/^/    /' || true
+fi
 
 echo
 echo "pronto: $APP"

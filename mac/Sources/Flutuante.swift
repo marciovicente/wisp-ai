@@ -47,10 +47,7 @@ struct ConteudoFlutuante: View {
                 balao(que, projeto)
                     .padding(.bottom, 2)
             }
-            ZStack(alignment: .topTrailing) {
-                Mascote(estado: estado, lado: tamanho)
-                if sessoes.count > 1 { contador }
-            }
+            Mascote(estado: estado, lado: tamanho)
         }
         .padding(8)
         // Nada de fundo. Ver comentário no topo.
@@ -63,11 +60,29 @@ struct ConteudoFlutuante: View {
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
-            if !projeto.isEmpty {
-                Text(projeto)
-                    .font(.system(size: 9))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+            // Projeto e contagem na MESMA linha.
+            //
+            // O contador era um círculo laranja solto ao lado do mascote, e
+            // competia com o balão em vez de completá-lo: dois elementos
+            // disputando "o que está acontecendo". Aqui ele vira o que
+            // sempre foi — um detalhe do projeto que está falando.
+            //
+            // "+1" significa uma OUTRA sessão além desta, não o total: quem
+            // fala já está nomeado logo ao lado.
+            if !projeto.isEmpty || sessoes.count > 1 {
+                HStack(spacing: 4) {
+                    if !projeto.isEmpty {
+                        Text(projeto)
+                            .font(.system(size: 9))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    if sessoes.count > 1 {
+                        Text("+\(sessoes.count - 1)")
+                            .font(.system(size: 9, weight: .semibold).monospacedDigit())
+                            .foregroundStyle(Paleta.estado("trabalhando"))
+                    }
+                }
             }
         }
         .padding(.horizontal, 10)
@@ -89,18 +104,6 @@ struct ConteudoFlutuante: View {
         }
         .fixedSize()
         .frame(maxWidth: 190)
-    }
-
-    /// Quantas sessões, quando é mais de uma. Só o número: se você quer
-    /// detalhe, o painel da barra tem a lista inteira.
-    private var contador: some View {
-        Text("\(sessoes.count)")
-            .font(.system(size: 10, weight: .bold).monospacedDigit())
-            .foregroundStyle(.white)
-            .frame(minWidth: 17, minHeight: 17)
-            .background(Circle().fill(Paleta.estado("trabalhando")))
-            .overlay(Circle().strokeBorder(.white.opacity(0.85), lineWidth: 1.5))
-            .offset(x: 2, y: 2)
     }
 }
 

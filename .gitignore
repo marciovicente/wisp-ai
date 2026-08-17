@@ -1,0 +1,32 @@
+# Compilados — refeitos por ./install.sh e por idf.py build
+mac/build/
+firmware/build/
+
+# Ambiente virtual do ESP-IDF (esptool e companhia). Vem do instalador do
+# próprio ESP-IDF, não é nosso e pesa 45MB.
+.venv/
+__pycache__/
+*.pyc
+
+# Componentes buscados pelo gerenciador do ESP-IDF a partir do
+# idf_component.yml. São 250MB de código de terceiros; versionar isso
+# inchava o repositório e ainda por cima congelava versões que o próprio
+# gerenciador sabe resolver.
+firmware/managed_components/
+
+# Gerado a partir de sdkconfig.defaults, que ESTE sim é versionado.
+# O sdkconfig carrega caminhos absolutos da máquina de quem compilou.
+firmware/sdkconfig
+firmware/sdkconfig.old
+
+# Dump da flash de fábrica da placa (16MB). É firmware proprietário da
+# Waveshare — não é nosso para redistribuir, e cada pessoa tira o seu antes
+# de gravar pela primeira vez.
+backup/
+
+# A configuração fica em ~/.fagulha/config.json, fora daqui de propósito,
+# porque guarda o token. Esta linha existe caso alguém a copie para cá.
+config.json
+*.token
+
+.DS_Store

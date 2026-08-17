@@ -1,0 +1,94 @@
+# Fagulha — ESP32-S3-Touch-AMOLED-2.16
+#
+# Base: sdkconfig.defaults do exemplo oficial da Waveshare (02_lvgl_demo_v9),
+# com os demos do LVGL removidos (só incham o binário) e o necessário de rede
+# acrescentado.
+#
+# Os três valores abaixo NÃO são chute — foram conferidos contra o silício:
+#   FLASHMODE_QIO   <- eFuse do chip diz "quad (4 data lines)"
+#   FLASHSIZE_16MB  <- esptool detectou 16MB (device 0x4018)
+#   SPIRAM_MODE_OCT <- ESP32-S3R8 traz PSRAM octal; errar aqui é boot loop
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y
+CONFIG_SPIRAM_RODATA=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_XIP_FROM_PSRAM=y
+
+CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
+CONFIG_ESP32S3_DATA_CACHE_64KB=y
+CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+CONFIG_FREERTOS_HZ=1000
+
+# —— Memória: WiFi vs. DMA do display ——
+# O driver SPI do CO5300 precisa de buffer DMA em RAM INTERNA. Com a pilha
+# WiFi+lwIP alocando lá também, a interna acaba e o painel para de atualizar
+# com "Failed to allocate priv TX buffer" / ESP_ERR_NO_MEM.
+# Empurrar os buffers de rede para a PSRAM devolve a interna para o display.
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+
+# Medido: só o TRY_ALLOCATE acima deixou 16KB de interna livre (mínimo 7,8KB),
+# insuficiente para o DMA do painel. O resto da economia vem daqui.
+#
+# Desligar AMPDU custa throughput, e aqui isso é irrelevante: nosso tráfego é
+# um GET de ~290 bytes a cada 600ms. Em troca libera as janelas de block-ack,
+# que são das maiores estruturas em RAM interna.
+CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=n
+CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=n
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=4
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=8
+CONFIG_ESP_WIFI_TX_BUFFER_TYPE=1
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=8
+
+# lwIP: janelas TCP menores. Também trocam vazão por RAM, mesmo raciocínio.
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=2880
+CONFIG_LWIP_TCP_WND_DEFAULT=2880
+
+# TENTADO E REVERTIDO: mexer em SPIRAM_MALLOC_RESERVE_INTERNAL /
+# ALWAYSINTERNAL piorou (interna livre no boot caiu de 26KB para 7,7KB).
+# A causa não era política de alocação: o SPI aloca um buffer de rebote do
+# TAMANHO DO FLUSH quando o comprimento da área não está alinhado ao cache.
+# Com buffer_height=50 isso pede até 48KB contíguos. A solução é diminuir o
+# teto do flush — feito em main.c, registrando o display com buffer menor.
+
+# —— LVGL ——
+CONFIG_LV_USE_CLIB_MALLOC=y
+CONFIG_LV_USE_CLIB_STRING=y
+CONFIG_LV_USE_CLIB_SPRINTF=y
+CONFIG_LV_DEF_REFR_PERIOD=15
+CONFIG_LV_OS_FREERTOS=y
+CONFIG_LV_OBJ_STYLE_CACHE=y
+CONFIG_LV_DRAW_SW_DRAW_UNIT_CNT=2
+CONFIG_LV_ATTRIBUTE_FAST_MEM_USE_IRAM=y
+
+# Fontes: só as que a interface usa de fato.
+#
+# NOTA: as Montserrat embutidas do LVGL cobrem apenas ASCII. Acentos (ã, ç, í)
+# saem como quadrado vazio. Por isso todo texto EXIBIDO está em inglês — gerar
+# uma fonte com charset estendido é possível, mas custa flash e um passo de
+# build a mais para resolver só a acentuação.
+CONFIG_LV_FONT_MONTSERRAT_16=y
+CONFIG_LV_FONT_MONTSERRAT_20=y
+CONFIG_LV_FONT_MONTSERRAT_24=y
+CONFIG_LV_FONT_MONTSERRAT_28=y
+CONFIG_LV_FONT_MONTSERRAT_32=y
+CONFIG_LV_FONT_MONTSERRAT_38=y
+CONFIG_LV_FONT_MONTSERRAT_48=y
+
+# Monitor de FPS/CPU do LVGL: DESLIGADO. Serviu para medir a animação
+# (23fps -> 66fps depois de cortar redesenho redundante), mas é sobreposição
+# na tela e o aparelho agora fica à vista.
+#
+# Não perdemos a medição: ui.c conta LV_EVENT_REFR_READY por conta própria e
+# loga o FPS na serial, o que independe destas opções.
+CONFIG_LV_USE_SYSMON=n
+CONFIG_LV_USE_PERF_MONITOR=n
+
+CONFIG_IDF_EXPERIMENTAL_FEATURES=y

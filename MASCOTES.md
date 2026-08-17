@@ -69,3 +69,80 @@ Comece com oito imagens; se um dia justificar, o carregador aceita sequências.
 
 O conjunto inteiro é ignorado e volta o vetor embutido. É melhor um
 personagem coerente do que sete quadros bonitos e um buraco.
+
+---
+
+# Receita pronta: o Terminal
+
+Um computador de mesa retrô, tela CRT âmbar como rosto, bracinhos, sem pernas
+— ele *senta* na mesa. O âmbar amarra com o laranja da Fagulha, e é
+historicamente correto para um monitor da época.
+
+## Onde gerar
+
+Qualquer modelo de imagem serve. O que decide o resultado é a **técnica**, não
+a ferramenta:
+
+| onde | por quê |
+|---|---|
+| **ChatGPT** ou **Gemini** | geram e depois EDITAM na mesma conversa. É o caminho mais fácil para manter o mesmo personagem, e provavelmente você já tem |
+| **Midjourney** | melhor acabamento neste estilo 3D. Use `--cref <url-da-primeira-imagem>` em todas as outras |
+| **Blender** | consistência perfeita e estados futuros de graça. Só se você topar a curva |
+
+**A regra que decide tudo:** gere **um** personagem primeiro, aprove, e depois
+peça as variações **na mesma conversa**, sempre dizendo "o mesmo personagem".
+Recomeçar do zero a cada estado produz oito bonecos diferentes.
+
+## Prompt base — gere este primeiro
+
+> A small retro desktop computer character, 3D render, soft matte clay-like
+> material. Chunky rounded cream-beige plastic body like a 1984 all-in-one
+> home computer. Its face is a warm amber-glowing CRT screen. Two short stubby
+> arms, no legs — it sits on a desk. Eyes are simple glowing amber pixel
+> shapes on the screen. Cute, friendly, slightly chunky proportions, big head
+> small body. Soft studio lighting from the upper left, gentle shadow. Full
+> body, centered, facing the viewer, plain flat background. 3D icon style,
+> high detail.
+
+Gere até gostar. **Só siga adiante quando o personagem estiver aprovado** — é
+ele que vai se repetir oito vezes.
+
+## Os oito estados
+
+Para cada um, escreva: *"O mesmo personagem, mesma câmera, mesma iluminação,
+mesmo tamanho no quadro. Agora:"* seguido da linha abaixo.
+
+| arquivo | peça isto |
+|---|---|
+| `idle.png` | relaxed and content, eyes half-closed, small pixel smile, arms resting at its sides, screen glowing softly |
+| `working.png` | thinking — eyes looking up and to the side, one arm raised to its chin, faint scrolling text on the screen |
+| `tool.png` | busy working, leaning forward, both arms out and typing, narrowed focused eyes, cascading code characters on the screen |
+| `asking.png` | surprised and curious, wide round eyes, a large glowing question mark on the screen, one arm raised as if asking |
+| `waiting.png` | anxious and pleading, wide worried eyes, both arms clasped together in front, hunched slightly forward |
+| `done.png` | celebrating, both arms thrown up in the air, happy closed arc eyes and a wide smile on the screen, small sparks around it |
+| `error.png` | worried and apologetic, inner eyebrows raised, wavy mouth, glitch and static lines across the screen, arms drooping |
+| `offline.png` | powered off — screen completely dark with no glow, slumped posture, arms limp, dim and lifeless |
+
+Repare que `error` é **preocupado, não bravo**: a culpa não é de quem olha. E
+`tool` é o "trabalhando de verdade" — corpo inclinado e mãos ocupadas é o que
+faz esse estado ser legível de longe.
+
+## Depois de gerar
+
+**1. Tire o fundo.** Modelos de imagem quase nunca entregam PNG transparente.
+No macOS não precisa instalar nada: abra no Preview, `Ferramentas > Remover
+Fundo`, e salve como PNG. Alternativas: remove.bg, Pixelmator.
+
+**2. Nomeie e largue na pasta:**
+
+```
+~/.fagulha/mascotes/terminal/
+  idle.png  working.png  tool.png  asking.png
+  waiting.png  done.png  error.png  offline.png
+```
+
+**3. Escolha no painel do app.** O seletor "Personagem" aparece sozinho assim
+que a pasta tiver os oito.
+
+Não se preocupe em acertar tamanho e centralização na mão — veja
+`mac/normalizar-mascote.sh` no repositório.

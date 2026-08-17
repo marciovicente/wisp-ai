@@ -40,8 +40,11 @@ enum Limites {
             switch self {
             case .semCredencial(let s) where s == errSecUserCanceled:
                 return "acesso ao chaveiro recusado"
-            case .semCredencial:
+            case .semCredencial(let s) where s == errSecItemNotFound:
                 return "credencial do Claude Code não encontrada"
+            case .semCredencial(let s):
+                // O número importa: sem ele, "não deu" é indepurável.
+                return "chaveiro recusou (status \(s))"
             case .semToken:
                 return "credencial sem token de acesso"
             case .http(401), .http(403):
@@ -56,7 +59,7 @@ enum Limites {
 
     // MARK: - chaveiro
 
-    private static func token() throws -> String {
+    private nonisolated static func token() throws -> String {
         let consulta: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: servico,
@@ -97,7 +100,16 @@ enum Limites {
     /// Devolve o objeto de utilização cru, do jeito que a Anthropic mandou.
     /// Quem interpreta é o bridge, que já sabe o formato por causa do cache.
     static func buscar() async throws -> [String: Any] {
-        let t = try token()
+        // FORA da main actor, obrigatoriamente.
+        //
+        // SecItemCopyMatching é síncrona e, quando o macOS resolve pedir sua
+        // autorização, ela só retorna depois que você responde ao diálogo.
+        // Chamada da main actor, isso congela a interface inteira enquanto a
+        // janela espera — e o painel fica travado justamente no momento em
+        // que precisa explicar o que está acontecendo.
+        let t = try await Task.detached(priority: .userInitiated) {
+            try token()
+        }.value
 
         var req = URLRequest(url: endpoint)
         req.httpMethod = "GET"
@@ -121,9 +133,20 @@ enum Limites {
         return obj
     }
 
+    /// Conta ao bridge por que não deu, para o motivo aparecer em /app e não
+    /// ficar preso dentro do app. Diagnosticar "está usando o cache" sem saber
+    /// a causa é adivinhação.
+    static func reportarFalha(_ motivo: String, porta: Int) async {
+        await postar(["erro": motivo], porta: porta)
+    }
+
     /// Entrega ao bridge, que passa a preferir isto ao cache em disco.
     static func entregar(_ utilizacao: [String: Any], porta: Int) async {
-        guard let corpo = try? JSONSerialization.data(withJSONObject: utilizacao) else { return }
+        await postar(utilizacao, porta: porta)
+    }
+
+    private static func postar(_ corpoObj: [String: Any], porta: Int) async {
+        guard let corpo = try? JSONSerialization.data(withJSONObject: corpoObj) else { return }
         var req = URLRequest(url: URL(string: "http://127.0.0.1:\(porta)/limites")!)
         req.httpMethod = "POST"
         req.timeoutInterval = 5

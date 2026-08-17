@@ -197,6 +197,7 @@ final class Bridge: ObservableObject {
             erroLimites = nil
         } catch let f as Limites.Falha {
             erroLimites = f.descricao
+            await Limites.reportarFalha(f.descricao, porta: Self.porta)
             if case .semCredencial(let s) = f, s == errSecUserCanceled {
                 buscarLimites = false
             }

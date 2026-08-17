@@ -119,6 +119,7 @@ class State:
         # que so e reescrito quando algo dispara a busca — visto parado 3 dias.
         self.limites_vivos = None
         self.limites_vivos_at = 0.0
+        self.limites_erro = ""
         # Quem foi o ultimo cliente NAO-local a buscar /state, e quando.
         # E assim que sabemos se a placa esta viva: ela e a unica coisa que
         # busca de fora. O app da barra le isso pra mostrar o vinculo.
@@ -374,6 +375,7 @@ class Handler(BaseHTTPRequestHandler):
                 "limites": snap["lim"],
                 "limites_age_s": snap["lim_age"],
                 "limites_fonte": snap.get("lim_fonte", ""),
+                "limites_erro": STATE.limites_erro,
                 "pico": snap["peak"],
                 "uso": total,
                 "modelos": modelos,
@@ -416,8 +418,14 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, {"error": "json"})
                 return
             with STATE.lock:
-                STATE.limites_vivos = payload
-                STATE.limites_vivos_at = time.time()
+                if "erro" in payload:
+                    # Falha do app: guardamos o motivo e NAO tocamos no
+                    # ultimo dado bom, que ainda pode estar dentro do prazo.
+                    STATE.limites_erro = str(payload["erro"])[:200]
+                else:
+                    STATE.limites_vivos = payload
+                    STATE.limites_vivos_at = time.time()
+                    STATE.limites_erro = ""
             self._send(200, {"ok": True})
             return
 

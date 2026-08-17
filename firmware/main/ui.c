@@ -105,6 +105,13 @@ static void carregar_fotos(void)
 /* ——— paleta por estado ——— */
 typedef struct { uint8_t r, g, b, dr, dg, db; } cor_t;
 
+/* O corpo do computador nao muda de cor — quem muda e a TELA, como num
+ * monitor de verdade. Isso e mais fiel ao personagem e mais legivel: a cor
+ * chega como LUZ vindo de dentro, nao como o boneco inteiro trocando de
+ * tinta. */
+#define C_CARCACA_T lv_color_make(238, 230, 210)
+#define C_CARCACA_B lv_color_make(206, 194, 172)
+
 static const cor_t COR[FG_QTD] = {
     [FG_OCIOSO]      = {232, 132,  90, 176,  78,  52},
     [FG_TRABALHANDO] = {232, 132,  90, 176,  78,  52},
@@ -169,6 +176,8 @@ typedef struct {
      * boneco em oito cores. Olho vira BRANCO com pupila e brilho; sobrancelha
      * e boca entram porque e nelas que a expressao mora. */
     lv_obj_t *pupila[2], *brilho[2], *sobrancelha[2], *boca, *chama;
+    lv_obj_t *tela, *braco[2];       /* carcaca de computador */
+    lv_obj_t *moldura, *luz, *scan[2], *topo;  /* profundidade */
     lv_obj_t *foto;          /* mascote de imagem; NULL = desenhado */
     int16_t p_boca, p_esc;   /* guardas do rosto: estado e escala */
     /* Pontos da sobrancelha. lv_line guarda o PONTEIRO, nao copia — se este
@@ -345,9 +354,9 @@ static void aplicar_layout(int total)
         /* chama entra na lista: ela e IRMA do corpo, nao filha. Olhos e
          * boca somem junto com o corpo por serem filhos; a chama nao,
          * e ficaria pairando sozinha sobre o relogio. */
-        lv_obj_t *objs[] = {m->corpo, m->fagulha, m->detalhe,
-                            m->projeto, m->chama, m->foto};
-        for (size_t k = 0; k < 6; k++) {
+        lv_obj_t *objs[] = {m->corpo, m->fagulha, m->detalhe, m->projeto,
+                            m->chama, m->foto, m->braco[0], m->braco[1]};
+        for (size_t k = 0; k < 8; k++) {
             if (!objs[k]) continue;
             if (ativo) lv_obj_remove_flag(objs[k], LV_OBJ_FLAG_HIDDEN);
             else       lv_obj_add_flag(objs[k], LV_OBJ_FLAG_HIDDEN);
@@ -366,9 +375,53 @@ static void aplicar_layout(int total)
             lv_obj_align(m->foto, LV_ALIGN_CENTER, v.x, v.y);
         }
         m->d = v.d;
+        /* Carcaca: quadrada com cantos generosos — o Macintosh original.
+         * A tela ocupa 70% dela e fica deslocada para cima, deixando embaixo
+         * a faixa onde ficaria o drive de disquete. */
         lv_obj_set_size(m->corpo, v.d, v.d);
-        lv_obj_set_style_radius(m->corpo, v.d * 42 / 100, 0);
+        lv_obj_set_style_radius(m->corpo, v.d * 22 / 100, 0);
         lv_obj_align(m->corpo, LV_ALIGN_CENTER, v.x, v.y);
+
+        int16_t td = v.d * 70 / 100, th = td * 82 / 100;
+        int16_t ty = -v.d * 6 / 100, tr = td * 12 / 100;
+
+        /* Moldura 4% maior que a tela e 2% mais baixa: a sobra aparece so em
+         * cima, que e onde a sombra de um vao afundado cai. */
+        lv_obj_set_size(m->moldura, td + v.d * 5 / 100, th + v.d * 5 / 100);
+        lv_obj_set_style_radius(m->moldura, tr + v.d * 2 / 100, 0);
+        lv_obj_align(m->moldura, LV_ALIGN_CENTER, 0, ty - v.d * 1 / 100);
+
+        lv_obj_set_size(m->tela, td, th);
+        lv_obj_set_style_radius(m->tela, tr, 0);
+        lv_obj_align(m->tela, LV_ALIGN_CENTER, 0, ty);
+
+        /* Luz: cobre o terco superior da tela e some para baixo. */
+        lv_obj_set_size(m->luz, td, th * 62 / 100);
+        lv_obj_set_style_radius(m->luz, tr, 0);
+        lv_obj_align(m->luz, LV_ALIGN_TOP_MID, 0, 0);
+
+        int16_t sh = v.d / 90; if (sh < 1) sh = 1;
+        for (int i = 0; i < 2; i++) {
+            lv_obj_set_size(m->scan[i], td, sh);
+            lv_obj_align(m->scan[i], LV_ALIGN_CENTER, 0,
+                         (i == 0 ? -1 : 1) * th * 26 / 100);
+        }
+
+        /* Faixa de luz no topo da carcaca, acompanhando o arredondamento. */
+        lv_obj_set_size(m->topo, v.d * 72 / 100, v.d * 26 / 100);
+        lv_obj_set_style_radius(m->topo, v.d * 13 / 100, 0);
+        lv_obj_align(m->topo, LV_ALIGN_TOP_MID, 0, v.d * 4 / 100);
+
+        /* Bracos: menores, mais baixos e da cor da SOMBRA da carcaca. Antes
+         * eram claros e do tamanho de asas — pareciam algodao colado. */
+        int16_t bl = v.d * 10 / 100, bh = v.d * 20 / 100;
+        for (int b = 0; b < 2; b++) {
+            lv_obj_set_size(m->braco[b], bl, bh);
+            lv_obj_set_style_radius(m->braco[b], bl / 2, 0);
+            lv_obj_align(m->braco[b], LV_ALIGN_CENTER,
+                         v.x + (b == 0 ? -1 : 1) * (v.d / 2 + bl / 4),
+                         v.y + v.d * 22 / 100);
+        }
 
         lv_obj_set_style_text_font(m->detalhe, v.f_det, 0);
         lv_obj_set_style_text_font(m->projeto, v.f_proj, 0);
@@ -439,8 +492,9 @@ static void animar_um(mascote_t *m, uint32_t agora, bool sozinho)
      * listras visíveis. Uma varredura por mudança é o mínimo possível. */
     if (m->alvo != m->anterior) {
         m->anterior = m->alvo;
-        lv_obj_set_style_bg_color(m->corpo, lv_color_make(C->r, C->g, C->b), 0);
-        lv_obj_set_style_bg_grad_color(m->corpo, lv_color_make(C->dr, C->dg, C->db), 0);
+        /* A cor do estado e a LUZ da tela, nao a tinta do boneco. */
+        lv_obj_set_style_bg_color(m->tela, lv_color_make(C->r, C->g, C->b), 0);
+        lv_obj_set_style_bg_grad_color(m->tela, lv_color_make(C->dr, C->dg, C->db), 0);
     }
 
     /* Respiração vai nos OLHOS, não no corpo: qualquer mudança no corpo
@@ -486,7 +540,7 @@ static void animar_um(mascote_t *m, uint32_t agora, bool sozinho)
          *
          * O comentario no topo deste arquivo ja dizia isso, e eu passei por
          * cima dele. Fica registrado. */
-        int16_t sep = 42 * esc / 236;
+        int16_t sep = 30 * esc / 236;
         for (int i = 0; i < 2; i++) {
             lv_obj_set_size(m->olho[i], larg, alt);
             lv_obj_align(m->olho[i], LV_ALIGN_CENTER,
@@ -689,20 +743,91 @@ static void criar_painel(lv_obj_t *pai)
 
 static void criar_mascote(lv_obj_t *pai, mascote_t *m)
 {
+    /* CARCACA: a caixa creme do computador. */
     m->corpo = lv_obj_create(pai);
     lv_obj_set_style_border_width(m->corpo, 0, 0);
     lv_obj_set_style_pad_all(m->corpo, 0, 0);
+    lv_obj_set_style_bg_color(m->corpo, C_CARCACA_T, 0);
+    lv_obj_set_style_bg_grad_color(m->corpo, C_CARCACA_B, 0);
     lv_obj_set_style_bg_grad_dir(m->corpo, LV_GRAD_DIR_VER, 0);
     so_decoracao(m->corpo);
+
+    /* BRACOS: dois toquinhos nas laterais. Filhos da carcaca, entao somem
+     * junto com ela sem precisar entrar em lista nenhuma. */
+    for (int i = 0; i < 2; i++) {
+        m->braco[i] = lv_obj_create(pai);
+        lv_obj_set_style_border_width(m->braco[i], 0, 0);
+        lv_obj_set_style_bg_color(m->braco[i], C_CARCACA_B, 0);
+        lv_obj_set_style_pad_all(m->braco[i], 0, 0);
+        so_decoracao(m->braco[i]);
+    }
+
+    /* MOLDURA: um retangulo escuro logo atras da tela, deslocado para baixo.
+     * E o truque mais barato de profundidade que existe — o olho le a sombra
+     * na borda de cima como "isto esta AFUNDADO na carcaca". Sem ela, tela e
+     * carcaca parecem adesivos no mesmo plano. */
+    m->moldura = lv_obj_create(m->corpo);
+    lv_obj_set_style_border_width(m->moldura, 0, 0);
+    lv_obj_set_style_bg_color(m->moldura, lv_color_make(150, 138, 118), 0);
+    lv_obj_set_style_pad_all(m->moldura, 0, 0);
+    so_decoracao(m->moldura);
+
+    /* BRILHO DO TOPO: faixa clara na parte de cima da carcaca. Plastico
+     * arredondado sob luz de cima tem essa banda; sem ela a caixa e um
+     * retangulo pintado. */
+    m->topo = lv_obj_create(m->corpo);
+    lv_obj_set_style_border_width(m->topo, 0, 0);
+    lv_obj_set_style_bg_color(m->topo, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(m->topo, LV_OPA_30, 0);
+    lv_obj_set_style_bg_grad_color(m->topo, lv_color_white(), 0);
+    lv_obj_set_style_bg_grad_dir(m->topo, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_bg_main_opa(m->topo, LV_OPA_40, 0);
+    lv_obj_set_style_bg_grad_opa(m->topo, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_pad_all(m->topo, 0, 0);
+    so_decoracao(m->topo);
+
+    /* TELA: o rosto. E ela que recebe a cor do estado. */
+    m->tela = lv_obj_create(m->corpo);
+    lv_obj_set_style_border_width(m->tela, 0, 0);
+    lv_obj_set_style_pad_all(m->tela, 0, 0);
+    lv_obj_set_style_bg_grad_dir(m->tela, LV_GRAD_DIR_VER, 0);
+    so_decoracao(m->tela);
+
+    /* LUZ: nucleo claro no meio da tela, esmaecendo para baixo. Um CRT nao
+     * ilumina por igual — o centro estoura e as bordas caem. E o que mais
+     * faz a tela parecer ACESA em vez de pintada. */
+    m->luz = lv_obj_create(m->tela);
+    lv_obj_set_style_border_width(m->luz, 0, 0);
+    lv_obj_set_style_bg_color(m->luz, lv_color_white(), 0);
+    lv_obj_set_style_bg_grad_color(m->luz, lv_color_white(), 0);
+    lv_obj_set_style_bg_grad_dir(m->luz, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_bg_main_opa(m->luz, LV_OPA_40, 0);
+    lv_obj_set_style_bg_grad_opa(m->luz, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_pad_all(m->luz, 0, 0);
+    so_decoracao(m->luz);
+
+    /* SCANLINES: duas faixas escuras finas. Sao elas que dizem "isto e uma
+     * tela de varredura", nao um retangulo laranja. */
+    for (int i = 0; i < 2; i++) {
+        m->scan[i] = lv_obj_create(m->tela);
+        lv_obj_set_style_border_width(m->scan[i], 0, 0);
+        lv_obj_set_style_radius(m->scan[i], 0, 0);
+        lv_obj_set_style_bg_color(m->scan[i], lv_color_black(), 0);
+        lv_obj_set_style_bg_opa(m->scan[i], LV_OPA_10, 0);
+        lv_obj_set_style_pad_all(m->scan[i], 0, 0);
+        so_decoracao(m->scan[i]);
+    }
 
     for (int i = 0; i < 2; i++) {
         /* BRANCO do olho. Antes o olho inteiro era escuro — duas frestas num
          * corpo redondo, que lia como focinho. Olho de verdade tem branco,
          * pupila e um ponto de brilho; sem o brilho ele vira buraco. */
-        m->olho[i] = lv_obj_create(m->corpo);
-        lv_obj_set_style_radius(m->olho[i], LV_RADIUS_CIRCLE, 0);
+        m->olho[i] = lv_obj_create(m->tela);
+        /* Olho de PIXEL: quadrado com canto minimo. Numa tela CRT o
+         * rosto e desenhado por blocos, nao por formas organicas. */
+        lv_obj_set_style_radius(m->olho[i], 2, 0);
         lv_obj_set_style_border_width(m->olho[i], 0, 0);
-        lv_obj_set_style_bg_color(m->olho[i], lv_color_make(252, 250, 250), 0);
+        lv_obj_set_style_bg_color(m->olho[i], lv_color_make(74, 44, 18), 0);
         lv_obj_set_style_pad_all(m->olho[i], 0, 0);
         so_decoracao(m->olho[i]);
 
@@ -731,7 +856,7 @@ static void criar_mascote(lv_obj_t *pai, mascote_t *m)
          * porque o pixel velho nunca e coberto.
          *
          * Uma linha de dois pontos ja nasce inclinada. Zero camada. */
-        m->sobrancelha[i] = lv_line_create(m->corpo);
+        m->sobrancelha[i] = lv_line_create(m->tela);
         lv_obj_set_style_line_color(m->sobrancelha[i], lv_color_make(40, 24, 22), 0);
         lv_obj_set_style_line_opa(m->sobrancelha[i], LV_OPA_80, 0);
         lv_obj_set_style_line_rounded(m->sobrancelha[i], true, 0);
@@ -742,7 +867,7 @@ static void criar_mascote(lv_obj_t *pai, mascote_t *m)
      * sorriso, para cima vira aflicao, fechado em 360 vira o "o" de surpresa.
      * Sete widgets diferentes dariam o mesmo resultado com sete vezes mais
      * objetos na tela — e objeto custa varredura. */
-    m->boca = lv_arc_create(m->corpo);
+    m->boca = lv_arc_create(m->tela);
     lv_obj_remove_style(m->boca, NULL, LV_PART_KNOB);
     lv_obj_set_style_arc_width(m->boca, 0, LV_PART_INDICATOR);
     lv_obj_set_style_arc_color(m->boca, lv_color_make(40, 24, 22), LV_PART_MAIN);
@@ -816,7 +941,7 @@ void ui_criar(void)
     }
     criar_painel(g_tile_painel);
 
-    carregar_fotos();
+    /* carregar_fotos();  <- desenhado supera imagem aqui; ver commit */
     for (int i = 0; i < FG_MAX_SESSOES; i++) criar_mascote(tela, &g_m[i]);
 
     for (int i = 0; i < QTD_INTERROG; i++) {
@@ -939,8 +1064,9 @@ void ui_atualizar(const fg_dados_t *d)
                  * Sem isto ela fica pairando sobre o relogio — armadilha que
                  * ja pegou o rodape e a chama antes dela. */
                 lv_obj_t *o[] = {g_m[i].corpo, g_m[i].fagulha, g_m[i].detalhe,
-                                 g_m[i].projeto, g_m[i].chama, g_m[i].foto};
-                for (size_t k = 0; k < 6; k++)
+                                 g_m[i].projeto, g_m[i].chama, g_m[i].foto,
+                                 g_m[i].braco[0], g_m[i].braco[1]};
+                for (size_t k = 0; k < 8; k++)
                     if (o[k]) lv_obj_add_flag(o[k], LV_OBJ_FLAG_HIDDEN);
             }
             for (int k = 0; k < QTD_INTERROG; k++)

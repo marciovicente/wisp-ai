@@ -77,7 +77,21 @@ static esp_lcd_touch_handle_t s_toque = NULL;    /* idem: gira junto com a tela 
  * Com 8 o rebote cai para 7,7KB, que cabe com folga. Custa mais flushes por
  * quadro; em troca o desenho volta a acontecer sempre. Desenho lento é
  * visível, desenho que falha é indistinguível de corrupção. */
-#define ALTURA_BUFFER 8
+/* 4 linhas.
+ *
+ * Foi 16, depois 8. Cai para 4 porque o buffer vive em RAM INTERNA e essa
+ * memoria chegou a 180 BYTES de minimo historico com os mascotes de imagem —
+ * territorio de estouro. Nao e teoria: a placa foi vista reiniciando sozinha,
+ * e falta de RAM interna e a causa que sobra quando a rede esta boa e o
+ * bridge responde.
+ *
+ * 480*4*2 = 3,8KB em vez de 7,7KB. Libera quase 4KB de um total que anda na
+ * casa dos 10KB livres. Custa mais tiras por quadro, mas com imagem nao ha
+ * animacao por quadro — a tela so redesenha quando o estado muda, e nessa
+ * hora um pouco mais lento nao se percebe.
+ *
+ * Trocar velocidade que ninguem ve por estabilidade que todo mundo ve. */
+#define ALTURA_BUFFER 4
 
 /* O CO5300 exige áreas com início par e fim ímpar. Idêntico ao rounder do BSP.
  *

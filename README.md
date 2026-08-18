@@ -1,7 +1,15 @@
-# Wisp
+<p align="center">
+  <img src="firmware/assets/idle.png" width="132" alt="The Wisp mascot: a small retro computer whose face is a warm amber screen">
+</p>
 
-A mascot that shows you what Claude Code is doing — in your Mac's menu bar,
-and optionally on a small AMOLED screen sitting on your desk.
+<h1 align="center">Wisp AI</h1>
+
+<p align="center">
+  A mascot that shows you what Claude Code is doing.
+</p>
+
+In your Mac's menu bar, and optionally on a small AMOLED screen sitting on your
+desk.
 
 Every active Claude session becomes a little character with its own state:
 working, running a tool, waiting for your permission, asking you a question,

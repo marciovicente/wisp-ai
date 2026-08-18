@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>Fagulha</string>
+    <string>Wisp</string>
     <key>CFBundleDisplayName</key>
-    <string>Fagulha</string>
+    <string>Wisp</string>
     <key>CFBundleIdentifier</key>
-    <string>com.marciovicente.fagulha</string>
+    <string>com.marciovicente.wisp</string>
     <key>CFBundleExecutable</key>
-    <string>Fagulha</string>
+    <string>Wisp</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -18,7 +18,7 @@
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
-    <!-- Só barra de menu: sem ícone no Dock, sem janela, sem alternar com Cmd-Tab. -->
+    <!-- Menu bar only: no Dock icon, no window, no Cmd-Tab switching. -->
     <key>LSUIElement</key>
     <true/>
     <key>NSHighResolutionCapable</key>

@@ -1,91 +1,92 @@
 import SwiftUI
 import AppKit
 
-/// Carrega mascotes feitos de imagem, de ~/.fagulha/mascotes/<nome>/.
+/// Loads image-based mascots from ~/.wisp/mascots/<name>/.
 ///
-/// Existe para o personagem deixar de ser refém do que eu consigo desenhar em
-/// código. Vetor procedural escala bem e não pesa nada, mas tem teto: não
-/// chega no acabamento de render 3D. Com isto, qualquer arte entra — feita à
-/// mão, encomendada ou gerada — e o vetor vira o padrão de fábrica.
+/// It exists so the character stops being hostage to what I can draw in code.
+/// Procedural vectors scale well and weigh nothing, but they have a ceiling:
+/// they do not reach the finish of a 3D render. With this, any art can come in
+/// — hand-drawn, commissioned or generated — and the vector becomes the
+/// factory default.
 ///
-/// REGRAS
-/// ------
-/// Um PNG por estado, nomeados como o bridge nomeia os estados. Faltando
-/// qualquer um, o conjunto inteiro é ignorado e voltamos ao vetor: melhor um
-/// personagem coerente do que sete quadros bonitos e um buraco.
+/// RULES
+/// -----
+/// One PNG per state, named the way the bridge names the states. If any one is
+/// missing, the whole set is ignored and we fall back to the vector: a
+/// coherent character beats seven pretty frames and a hole.
 ///
-/// As imagens são estáticas. O movimento é do código — flutuar, comprimir,
-/// inclinar. Num boneco de 46px na área de trabalho, animação quadro a quadro
-/// seria trabalho invisível.
+/// The images are static. The motion comes from the code — floating,
+/// squashing, tilting. On a 46px character on the desktop, frame-by-frame
+/// animation would be invisible work.
 enum Sprites {
 
-    static let pasta = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent(".fagulha/mascotes", isDirectory: true)
+    static let folder = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".wisp/mascots", isDirectory: true)
 
-    /// Nome do estado como arquivo. São os mesmos nomes que trafegam em
-    /// /state, para não haver duas tabelas de tradução no projeto.
-    static func arquivo(_ e: EstadoMascote) -> String {
-        switch e {
-        case .ocioso:      return "idle"
-        case .trabalhando: return "working"
-        case .ferramenta:  return "tool"
-        case .perguntando: return "asking"
-        case .esperando:   return "waiting"
-        case .concluido:   return "done"
-        case .erro:        return "error"
-        case .offline:     return "offline"
+    /// The state's name as a file name. These are the same names that travel
+    /// through /state, so the project has no second translation table.
+    static func file(_ s: MascotState) -> String {
+        switch s {
+        case .idle:     return "idle"
+        case .working:  return "working"
+        case .tool:     return "tool"
+        case .asking:   return "asking"
+        case .waiting:  return "waiting"
+        case .done:     return "done"
+        case .error:    return "error"
+        case .offline:  return "offline"
         }
     }
 
-    /// Qual conjunto usar. Vazio = o vetor embutido.
-    static var escolhido: String {
-        get { UserDefaults.standard.string(forKey: "mascote") ?? "" }
+    /// Which set to use. Empty = the built-in vector.
+    static var chosen: String {
+        get { UserDefaults.standard.string(forKey: "mascot") ?? "" }
         set {
-            UserDefaults.standard.set(newValue, forKey: "mascote")
+            UserDefaults.standard.set(newValue, forKey: "mascot")
             cache.removeAll()
-            completos.removeAll()
+            complete.removeAll()
         }
     }
 
-    /// Conjuntos disponíveis: subpastas que tenham os oito estados.
-    static func disponiveis() -> [String] {
-        guard let itens = try? FileManager.default.contentsOfDirectory(
-            at: pasta, includingPropertiesForKeys: [.isDirectoryKey]) else { return [] }
-        return itens
+    /// Available sets: subfolders that carry all eight states.
+    static func available() -> [String] {
+        guard let items = try? FileManager.default.contentsOfDirectory(
+            at: folder, includingPropertiesForKeys: [.isDirectoryKey]) else { return [] }
+        return items
             .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true }
             .map { $0.lastPathComponent }
-            .filter { completo($0) }
+            .filter { isComplete($0) }
             .sorted()
     }
 
     private static var cache: [String: NSImage] = [:]
-    private static var completos: [String: Bool] = [:]
+    private static var complete: [String: Bool] = [:]
 
-    /// Um conjunto só vale se tiver TODOS os estados.
-    static func completo(_ nome: String) -> Bool {
-        if let c = completos[nome] { return c }
-        let base = pasta.appendingPathComponent(nome, isDirectory: true)
-        let ok = EstadoMascote.allCases.allSatisfy { e in
+    /// A set only counts if it has EVERY state.
+    static func isComplete(_ name: String) -> Bool {
+        if let c = complete[name] { return c }
+        let base = folder.appendingPathComponent(name, isDirectory: true)
+        let ok = MascotState.allCases.allSatisfy { s in
             ["png", "PNG"].contains { ext in
                 FileManager.default.fileExists(
-                    atPath: base.appendingPathComponent("\(arquivo(e)).\(ext)").path)
+                    atPath: base.appendingPathComponent("\(file(s)).\(ext)").path)
             }
         }
-        completos[nome] = ok
+        complete[name] = ok
         return ok
     }
 
-    static func imagem(_ e: EstadoMascote) -> Image? {
-        let nome = escolhido
-        guard !nome.isEmpty, completo(nome) else { return nil }
-        let chave = "\(nome)/\(arquivo(e))"
-        if let img = cache[chave] { return Image(nsImage: img) }
+    static func image(_ s: MascotState) -> Image? {
+        let name = chosen
+        guard !name.isEmpty, isComplete(name) else { return nil }
+        let key = "\(name)/\(file(s))"
+        if let img = cache[key] { return Image(nsImage: img) }
 
-        let base = pasta.appendingPathComponent(nome, isDirectory: true)
+        let base = folder.appendingPathComponent(name, isDirectory: true)
         for ext in ["png", "PNG"] {
-            let url = base.appendingPathComponent("\(arquivo(e)).\(ext)")
+            let url = base.appendingPathComponent("\(file(s)).\(ext)")
             if let img = NSImage(contentsOf: url) {
-                cache[chave] = img
+                cache[key] = img
                 return Image(nsImage: img)
             }
         }
@@ -93,47 +94,48 @@ enum Sprites {
     }
 }
 
-/// O mascote de imagem, com o movimento vindo do código.
+/// The image mascot, with its motion coming from the code.
 ///
-/// Mesmos gestos do vetor — respiração, comprimir e esticar, uma inclinação
-/// de curiosidade — para os dois caminhos parecerem o mesmo personagem em
-/// temperamento, não só em forma.
-struct MascoteSprite: View {
-    let estado: EstadoMascote
-    let imagem: Image
-    var lado: CGFloat = 64
+/// The same gestures as the vector — breathing, squash and stretch, a curious
+/// tilt — so both paths read as the same character in temperament, not just in
+/// shape.
+struct SpriteMascot: View {
+    let state: MascotState
+    let image: Image
+    var side: CGFloat = 64
 
     var body: some View {
         TimelineView(.animation) { ctx in
             let t = ctx.date.timeIntervalSinceReferenceDate
-            let fase = sin(t / estado.periodo * 2 * .pi)
+            let phase = sin(t / state.period * 2 * .pi)
 
-            // Squash & stretch: o volume se conserva, então o que estica na
-            // vertical encolhe na horizontal. Sem isso o boneco só "infla".
-            let s = 1 + fase * estado.respiro
-            // Flutuar acompanha a respiração, meio ciclo atrás — corpo sobe
-            // depois de encher, como acontece de verdade.
-            let sobe = CGFloat(sin(t / estado.periodo * 2 * .pi - 0.9)) * lado * 0.03
-            // Curiosidade e aflição inclinam a cabeça; trabalho não.
-            let inclina: Double = {
-                switch estado {
-                case .perguntando: return sin(t * 1.6) * 5
-                case .esperando:   return sin(t * 2.4) * 3
-                case .erro:        return -4
-                default:           return 0
+            // Squash & stretch: volume is conserved, so whatever stretches
+            // vertically shrinks horizontally. Without it the character just
+            // "inflates".
+            let s = 1 + phase * state.breath
+            // Floating follows the breathing, half a cycle behind — the body
+            // rises after filling up, the way it really happens.
+            let rise = CGFloat(sin(t / state.period * 2 * .pi - 0.9)) * side * 0.03
+            // Curiosity and distress tilt the head; work does not.
+            let tilt: Double = {
+                switch state {
+                case .asking:  return sin(t * 1.6) * 5
+                case .waiting: return sin(t * 2.4) * 3
+                case .error:   return -4
+                default:       return 0
                 }
             }()
 
-            imagem
+            image
                 .resizable()
                 .interpolation(.high)
                 .aspectRatio(contentMode: .fit)
-                .frame(width: lado, height: lado)
+                .frame(width: side, height: side)
                 .scaleEffect(x: 1 / s, y: s, anchor: .bottom)
-                .rotationEffect(.degrees(inclina), anchor: .bottom)
-                .offset(y: sobe)
-                .frame(width: lado * 1.2, height: lado * 1.2)
+                .rotationEffect(.degrees(tilt), anchor: .bottom)
+                .offset(y: rise)
+                .frame(width: side * 1.2, height: side * 1.2)
         }
-        .accessibilityLabel("mascote: \(estado.rotulo)")
+        .accessibilityLabel("mascot: \(state.label)")
     }
 }

@@ -1,39 +1,39 @@
 import SwiftUI
 import AppKit
 
-// Folha de contato do mascote: desenha os oito estados num PNG para você
-// olhar lado a lado. Rode com ../preview.sh
+// Contact sheet for the mascot: draws the eight states into a PNG so you can
+// look at them side by side. Run it with ../preview.sh
 //
-// Serve para mexer no personagem sem precisar abrir o app: altere
-// Sources/Mascote.swift, rode isto, olhe o resultado. O ciclo inteiro leva
-// uns cinco segundos.
+// It exists so you can work on the character without opening the app: change
+// Sources/Mascot.swift, run this, look at the result. The whole loop takes
+// about five seconds.
 
-struct Folha: View {
-    let linhas: [[EstadoMascote]] = [
-        [.ocioso, .trabalhando, .ferramenta, .perguntando],
-        [.esperando, .concluido, .erro, .offline],
+struct Sheet: View {
+    let rows: [[MascotState]] = [
+        [.idle, .working, .tool, .asking],
+        [.waiting, .done, .error, .offline],
     ]
     var body: some View {
         VStack(spacing: 14) {
-            // Tamanho grande para julgar o desenho…
-            ForEach(linhas.indices, id: \.self) { i in
+            // Large, to judge the drawing…
+            ForEach(rows.indices, id: \.self) { i in
                 HStack(spacing: 16) {
-                    ForEach(linhas[i], id: \.self) { e in
+                    ForEach(rows[i], id: \.self) { s in
                         VStack(spacing: 4) {
-                            Mascote(estado: e, lado: 76)
-                            Text(e.rawValue)
+                            Mascot(state: s, side: 76)
+                            Text(s.rawValue)
                                 .font(.system(size: 10))
                                 .foregroundStyle(.white.opacity(0.75))
                         }
                     }
                 }
             }
-            // …e pequeno, que é como ele aparece na lista de sessões. Um
-            // personagem que só funciona grande não serve: aqui ele vive a
-            // 20px na maior parte do tempo.
+            // …and small, which is how it shows up in the session list. A
+            // character that only works large is no good: here it lives at
+            // 20px most of the time.
             HStack(spacing: 10) {
-                ForEach(EstadoMascote.allCases, id: \.self) { e in
-                    Mascote(estado: e, lado: 22)
+                ForEach(MascotState.allCases, id: \.self) { s in
+                    Mascot(state: s, side: 22)
                 }
             }
             .padding(.top, 2)
@@ -44,18 +44,18 @@ struct Folha: View {
 }
 
 @MainActor
-func gerar(_ destino: String) {
-    let r = ImageRenderer(content: Folha())
+func render(_ destination: String) {
+    let r = ImageRenderer(content: Sheet())
     r.scale = 2
     guard let img = r.nsImage,
           let tiff = img.tiffRepresentation,
           let rep = NSBitmapImageRep(data: tiff),
           let png = rep.representation(using: .png, properties: [:]) else {
-        print("falhou ao renderizar")
+        print("rendering failed")
         exit(1)
     }
-    try! png.write(to: URL(fileURLWithPath: destino))
-    print(destino)
+    try! png.write(to: URL(fileURLWithPath: destination))
+    print(destination)
 }
 
-MainActor.assumeIsolated { gerar(CommandLine.arguments[1]) }
+MainActor.assumeIsolated { render(CommandLine.arguments[1]) }

@@ -1,30 +1,32 @@
 #!/bin/bash
 #
-# Desenha os oito estados do mascote num PNG e abre.
+# Draws the mascot's eight states into a PNG and opens it.
 #
 #   ./mac/preview.sh
 #
-# Para mexer no personagem: edite mac/Sources/Mascote.swift, rode isto, olhe.
-# Ciclo de uns cinco segundos, sem abrir o app.
+# To work on the character: edit mac/Sources/Mascot.swift, run this, look.
+# A five-second loop, without opening the app.
 #
-# Onde mexer, do que mais muda para o que menos muda:
+# Where to touch, from what changes most to what changes least:
 #
-#   EstadoMascote.expressao   sobrancelha, boca, olhar e abertura por estado.
-#                             É aqui que a emoção mora. Sobrancelha sozinha
-#                             carrega mais que todo o resto somado.
-#   EstadoMascote.cores       o gradiente do corpo (topo, base).
-#   corpoPath()               a silhueta. Mudar isto muda o personagem.
-#   chamaPath()               a fagulha que flutua acima da cabeça.
-#   desenharBoca()            as sete bocas.
+#   MascotState.expression   eyebrow, mouth, gaze and eye opening per state.
+#                            This is where the emotion lives. The eyebrow alone
+#                            carries more than everything else combined.
+#   MascotState.colors       the body gradient (top, bottom).
+#   bodyPath()               the silhouette. Changing this changes the character.
+#   flamePath()              the light floating above its head.
+#   drawMouth()              the seven mouths.
 
 set -euo pipefail
-AQUI="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SAIDA="${1:-$AQUI/build/mascote.png}"
-mkdir -p "$(dirname "$SAIDA")"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OUT="${1:-$HERE/build/mascot.png}"
+mkdir -p "$(dirname "$OUT")"
 
+# Sprites.swift comes along because Mascot.swift falls back to it when the
+# user has image art installed. Without it this did not build at all.
 swiftc -O -target arm64-apple-macosx14.0 \
-    -o "$AQUI/build/preview" \
-    "$AQUI/Preview/main.swift" "$AQUI/Sources/Mascote.swift"
+    -o "$HERE/build/preview" \
+    "$HERE/Preview/main.swift" "$HERE/Sources/Mascot.swift" "$HERE/Sources/Sprites.swift"
 
-"$AQUI/build/preview" "$SAIDA"
-open "$SAIDA"
+"$HERE/build/preview" "$OUT"
+open "$OUT"

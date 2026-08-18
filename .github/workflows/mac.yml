@@ -1,0 +1,31 @@
+# Checks that the menu bar app still builds.
+#
+# It publishes nothing: the app is built on the machine of whoever installs it,
+# deliberately (a binary downloaded from the internet gets macOS quarantine
+# and, without a paid signature, the system refuses to open it). This only
+# keeps the build from breaking for whoever clones next.
+
+name: mac
+
+on:
+  push:
+    branches: [main]
+    paths: ['mac/**', 'bridge/**', 'install.sh', '.github/workflows/mac.yml']
+  pull_request:
+    paths: ['mac/**', 'bridge/**', 'install.sh']
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: build the app
+        run: ./mac/build.sh
+      - name: check the scripts
+        run: |
+          bash -n install.sh flash.sh mac/build.sh bridge/hook.sh
+          # The bridge runs on the Python 3.9 that ships with macOS — if a
+          # module uses newer syntax, the app starts and dies on the import,
+          # with no visible error.
+          /usr/bin/python3 -m compileall -q bridge/

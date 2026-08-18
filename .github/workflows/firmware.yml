@@ -1,0 +1,69 @@
+# Builds the firmware and publishes the binaries that ./flash.sh downloads.
+#
+# This is what lets people flash the board without ESP-IDF: they compile
+# nothing, they just receive these four binaries. Without this workflow
+# ./flash.sh has nowhere to download from and only works for people with a
+# local build.
+
+name: firmware
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths: ['firmware/**', '.github/workflows/firmware.yml']
+  pull_request:
+    paths: ['firmware/**']
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The version matters: Waveshare's BSP declares idf >=5.5 and does not
+      # build on 5.4. Pinned here for the same reason it is pinned in the README.
+      - name: build with ESP-IDF 5.5
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5
+          target: esp32s3
+          path: firmware
+
+      - name: package
+        run: |
+          set -euo pipefail
+          cd firmware/build
+          mkdir -p ../../dist
+          # Flatten the paths: the zip becomes one flat folder, and
+          # flasher_args comes along so the flasher keeps reading offsets from
+          # it instead of having addresses copied into the code.
+          python3 - <<'PY'
+          import json, shutil, pathlib
+          d = pathlib.Path('.')
+          out = pathlib.Path('../../dist')
+          args = json.loads((d / 'flasher_args.json').read_text())
+          for off, rel in args['flash_files'].items():
+              shutil.copy2(d / rel, out / pathlib.Path(rel).name)
+              args['flash_files'][off] = pathlib.Path(rel).name
+          for k in ('bootloader', 'app', 'partition-table', 'storage'):
+              if k in args:
+                  args[k]['file'] = pathlib.Path(args[k]['file']).name
+          (out / 'flasher_args.json').write_text(json.dumps(args, indent=2))
+          PY
+          cd ../../dist && zip -q -r ../wisp-firmware.zip . && cd ..
+          unzip -l wisp-firmware.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wisp-firmware
+          path: wisp-firmware.zip
+
+      # ./flash.sh fetches /releases/latest/download/wisp-firmware.zip, so the
+      # file name must not change between versions.
+      - name: publish to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${GITHUB_REF_NAME}" wisp-firmware.zip --clobber

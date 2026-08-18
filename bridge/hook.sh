@@ -1,12 +1,9 @@
 #!/bin/bash
-# Encaminha eventos de hook do Claude Code para o bridge do mascote.
+# Forwards Claude Code hook events to the mascot bridge.
 #
-# REGRA DE OURO: isto roda no caminho crítico de cada tool call. Nunca pode
-# atrasar nem bloquear o Claude. Se o bridge estiver fora do ar, falha em
-# ~200ms e segue em silêncio — nada de retry, nada de stderr.
-#
-# (É precisamente esse cuidado que falta no ~/.masko-desktop/hooks/hook-sender,
-#  que faz retry por ~2s a cada evento mesmo com o servidor morto.)
+# GOLDEN RULE: this runs on the critical path of every tool call. It must never
+# delay or block Claude. If the bridge is down it fails in ~200ms and moves on
+# in silence — no retries, nothing on stderr.
 
 INPUT=$(cat 2>/dev/null)
 
@@ -17,5 +14,5 @@ curl -s -X POST \
   --max-time 0.6 \
   http://127.0.0.1:4666/hook >/dev/null 2>&1
 
-# Sempre 0: um hook que retorna erro pode interferir na sessão.
+# Always 0: a hook that returns an error can interfere with the session.
 exit 0

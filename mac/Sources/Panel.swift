@@ -99,6 +99,11 @@ struct SessionRow: View {
 
 struct Panel: View {
     @ObservedObject var bridge: Bridge
+    /// Off only for the documentation shots. The footer is AppKit-backed
+    /// (checkboxes, a picker, buttons) and SwiftUI's ImageRenderer cannot draw
+    /// NSViews — they come out as placeholder blocks. It is also the part that
+    /// says least about what the app does.
+    var showsFooter = true
     @State private var openAtLogin = SMAppService.mainApp.status == .enabled
     @State private var loginError: String?
     @State private var character = Sprites.chosen
@@ -123,8 +128,10 @@ struct Panel: View {
                 Text(e).font(.system(size: 10)).foregroundStyle(.red).lineLimit(2)
             }
 
-            Divider()
-            footer
+            if showsFooter {
+                Divider()
+                footer
+            }
         }
         .padding(14)
         .frame(width: 300)

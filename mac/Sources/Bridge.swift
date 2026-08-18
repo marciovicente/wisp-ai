@@ -341,6 +341,20 @@ final class Bridge: ObservableObject {
         }
     }
 
+    /// Builds an instance holding fixed data, with no process and no polling.
+    ///
+    /// It exists for mac/Shots, which renders the panel for the documentation.
+    /// A real screenshot would carry real project names, real usage and the
+    /// board's address into a public README — permanently. Synthetic data also
+    /// makes the states that are hard to catch live (error, waiting) as easy to
+    /// photograph as the others.
+    static func fixture(_ json: String, alive: Bool = true) -> Bridge {
+        let b = Bridge()
+        b.state = alive ? .adopted : .stopped
+        b.data = try? JSONDecoder().decode(AppState.self, from: Data(json.utf8))
+        return b
+    }
+
     /// Short text for the menu bar icon. It favours the tightest limit,
     /// because that is the information you would look over there for.
     var barLabel: String {

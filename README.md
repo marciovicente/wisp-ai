@@ -19,6 +19,14 @@ weather forecast — a motionless character tells you nothing.
 In the menu bar you get usage, subscription limits and your open sessions
 without leaving what you were doing.
 
+<p align="center">
+  <img src="docs/states.png" width="820" alt="The eight states in a row: idle, thinking, working, asked you, needs you, finished, failed, no connection">
+</p>
+
+| the menu bar panel | on your desktop |
+|---|---|
+| <img src="docs/panel.png" width="270" alt="The panel: usage over the 5h and 7 day windows, subscription limits, today's totals, three active sessions and the board's address"> | <img src="docs/floating.png" width="180" alt="The mascot on the desktop, asking a question, with a bubble reading Auth method"> |
+
 ## Install
 
 ### On the Mac

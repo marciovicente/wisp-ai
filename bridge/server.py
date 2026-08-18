@@ -96,6 +96,15 @@ SESSAO_ATIVA_S = 30
 SESSAO_MORTA_S = 3 * 3600
 
 
+def _ips_locais() -> set:
+    """Todos os enderecos desta maquina, para nao confundi-los com a placa."""
+    import socket as _s
+    try:
+        return {i[4][0] for i in _s.getaddrinfo(_s.gethostname(), None)}
+    except OSError:
+        return set()
+
+
 def _sessao_nova() -> dict:
     return {"status": IDLE, "detail": "", "model": "", "project": "",
             "last_event": 0.0, "done_at": 0.0}
@@ -126,6 +135,11 @@ class State:
         self.placa_ip = ""
         self.placa_at = 0.0
         self.subiu_em = time.time()
+        # Desfile: mostra cada estado por alguns segundos, para conferir o
+        # visual sem precisar provocar oito situacoes de verdade. Expira
+        # sozinho — modo de demonstracao que fica ligado vira mentira na tela.
+        self.desfile_ate = 0.0
+        self.desfile_seg = 10.0
 
     def apply(self, payload: dict) -> None:
         """Traduz um evento de hook do Claude Code em estado do mascote."""
@@ -180,10 +194,24 @@ class State:
             elif ev in ("SubagentStart", "SubagentStop"):
                 ss["status"], ss["detail"] = WORKING, "subagent"
 
+    ORDEM_DESFILE = [IDLE, WORKING, TOOL, ASKING, WAITING, DONE, ERROR]
+
     def snapshot(self) -> dict:
         """Payload enxuto pra placa — ESP32 parseando JSON, sem gordura."""
         now = time.time()
         with self.lock:
+            if now < self.desfile_ate:
+                i = int((now - (self.desfile_ate - self._desfile_total))
+                        / self.desfile_seg) % len(self.ORDEM_DESFILE)
+                st = self.ORDEM_DESFILE[i]
+                falta = int(self.desfile_ate - now)
+                return {"s": [{"st": st, "dt": st, "pj": f"demo {falta}s",
+                               "md": "", "age": 0}],
+                        "n": 1, "age": 0, "reqs": 0, "tok_out": 0,
+                        "clk": time.strftime("%H:%M"), "day": time.strftime("%a %d %b"),
+                        "rest": 0, "lim": [], "lim_age": -1, "peak": -1,
+                        "lim_fonte": ""}
+
             # Limpa sessoes cujo terminal morreu sem avisar.
             for sid in [k for k, v in self.sessoes.items()
                         if now - v["last_event"] > SESSAO_MORTA_S]:
@@ -348,10 +376,30 @@ class Handler(BaseHTTPRequestHandler):
             self._send(401, {"error": "token"})
             return
 
-        if rota == "/state":
+        if rota == "/desfile":
             if not self._local():
+                self._send(403, {"error": "local only"})
+                return
+            q = parse_qs(urlparse(self.path).query)
+            seg = float((q.get("s") or ["10"])[0])
+            with STATE.lock:
+                STATE.desfile_seg = seg
+                STATE._desfile_total = seg * len(STATE.ORDEM_DESFILE)
+                STATE.desfile_ate = time.time() + STATE._desfile_total
+            self._send(200, {"ok": True, "segundos": STATE._desfile_total})
+            return
+
+        if rota == "/state":
+            # So conta como "a placa" quem vem de FORA desta maquina.
+            #
+            # Antes bastava nao ser 127.0.0.1, e qualquer teste meu pelo IP da
+            # LAN era registrado como se fosse a placa — o painel dizia que ela
+            # estava viva quando na verdade era eu batendo na porta. Diagnostico
+            # que mente e pior que diagnostico ausente.
+            ip = self.client_address[0]
+            if not self._local() and ip not in _ips_locais():
                 with STATE.lock:
-                    STATE.placa_ip = self.client_address[0]
+                    STATE.placa_ip = ip
                     STATE.placa_at = time.time()
             self._send(200, STATE.snapshot())
         elif rota == "/app":

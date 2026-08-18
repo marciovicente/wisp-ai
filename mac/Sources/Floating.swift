@@ -159,6 +159,11 @@ final class FloatingWindow: NSPanel {
 final class Floating {
     static let shared = Floating()
     private var window: FloatingWindow?
+    /// The bottom-left corner the mascot should keep. See pin().
+    private var anchor: NSPoint?
+    /// True while we are the ones moving the window, so the move observer
+    /// does not mistake our own correction for a drag.
+    private var correcting = false
     private static let positionKey = "floatingPosition"
 
     func show(_ bridge: Bridge) {
@@ -168,20 +173,47 @@ final class Floating {
         w.contentView = host
         w.setContentSize(host.fittingSize)
 
-        if let s = UserDefaults.standard.string(forKey: Self.positionKey) {
-            w.setFrameOrigin(NSPointFromString(s))
+        // A saved position is only honoured if it is still ON a screen.
+        //
+        // Found the hard way: the stored origin was {1608, -10236}. The window
+        // was being created, drawn and ordered front every launch — ten
+        // thousand points below every display. Left over from a monitor that
+        // is no longer plugged in.
+        //
+        // Restoring it blindly has no escape hatch: the mascot is "on", the
+        // checkbox is ticked, and nothing appears. You cannot drag back a
+        // window you cannot see, so the only way out was editing preferences
+        // by hand. Unplugging a monitor should not be able to do that.
+        let saved = UserDefaults.standard.string(forKey: Self.positionKey)
+            .map(NSPointFromString)
+        let onScreen = saved.map { p in
+            // One corner is enough: demanding the whole window be inside a
+            // screen would stop you leaving it deliberately half off, which is
+            // legitimate use.
+            NSScreen.screens.contains { $0.visibleFrame.contains(p) }
+        } ?? false
+
+        if let p = saved, onScreen {
+            w.setFrameOrigin(p)
         } else if let screen = NSScreen.main?.visibleFrame {
+            if saved != nil {
+                NSLog("wisp: saved position is off every screen — back to the corner")
+            }
             w.setFrameOrigin(NSPoint(x: screen.maxX - host.fittingSize.width - 28,
                                      y: screen.minY + 28))
         }
         w.orderFrontRegardless()
+        anchor = w.frame.origin
+        pin(w)
         window = w
     }
 
     func hide() {
         savePosition()
+        if let w = window { NotificationCenter.default.removeObserver(self, name: nil, object: w) }
         window?.orderOut(nil)
         window = nil
+        anchor = nil
     }
 
     func savePosition() {
@@ -189,17 +221,46 @@ final class Floating {
         UserDefaults.standard.set(NSStringFromPoint(w.frame.origin), forKey: Self.positionKey)
     }
 
-    /// The bubble changes width with the text, and the frame does not follow on
-    /// its own. We keep the BOTTOM LEFT corner fixed: that way the mascot stays
-    /// put and it is the bubble that grows upward, instead of the character
-    /// sliding across the desktop on every tool change.
-    func resize() {
-        guard let w = window, let host = w.contentView else { return }
-        let size = host.fittingSize
-        guard abs(w.frame.width - size.width) > 1 || abs(w.frame.height - size.height) > 1
-        else { return }
-        let origin = NSPoint(x: w.frame.minX, y: w.frame.minY)
-        w.setContentSize(size)
-        w.setFrameOrigin(origin)
+    /// Keeps the mascot planted while the bubble changes size.
+    ///
+    /// MEASURED, NOT ASSUMED. NSHostingView resizes the window on its own
+    /// whenever the content's ideal size changes, and AppKit anchors that
+    /// resize at the TOP — so the bottom edge drops every time. The bubble
+    /// changes height on every tool call, so the mascot walked down the screen
+    /// a few points at a time. A harness driving 24 content changes moved the
+    /// bottom edge from y=386 to y=82; over a working day it reached y=-10236,
+    /// which is how it ended up invisible with the checkbox still ticked.
+    ///
+    /// The previous attempt lived in a resize() called from the poll, and it
+    /// never ran once: it compared the window height against the content's
+    /// fitting size, those differ by one point of rounding, and the guard
+    /// required more than one. Worse, it read the anchor from the current
+    /// frame — by then already dragged down — so even when it did run it would
+    /// have preserved the drift instead of undoing it.
+    ///
+    /// So the anchor is REMEMBERED, not observed, and it is restored on every
+    /// resize the system performs.
+    private func pin(_ w: FloatingWindow) {
+        let centre = NotificationCenter.default
+        centre.addObserver(forName: NSWindow.didResizeNotification,
+                           object: w, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, let anchor = self.anchor,
+                      w.frame.origin != anchor else { return }
+                self.correcting = true
+                w.setFrameOrigin(anchor)
+                self.correcting = false
+            }
+        }
+        // A move we did not cause is the user dragging it: that becomes the
+        // new anchor. Without this check our own correction would be read as
+        // a drag and re-anchor the drift we just undid.
+        centre.addObserver(forName: NSWindow.didMoveNotification,
+                           object: w, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, !self.correcting else { return }
+                self.anchor = w.frame.origin
+            }
+        }
     }
 }

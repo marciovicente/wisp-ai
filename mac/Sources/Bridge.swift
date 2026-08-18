@@ -334,8 +334,6 @@ final class Bridge: ObservableObject {
             data = try JSONDecoder().decode(AppState.self, from: raw)
             pollError = nil
             await maybeFetchLimits(done: data?.tasks_done)
-            // The number of sessions changes the floating character's width.
-            if floating { Floating.shared.resize() }
         } catch {
             pollError = error.localizedDescription
         }
@@ -353,6 +351,12 @@ final class Bridge: ObservableObject {
         b.state = alive ? .adopted : .stopped
         b.data = try? JSONDecoder().decode(AppState.self, from: Data(json.utf8))
         return b
+    }
+
+    /// Replaces the fixed data on an instance built by fixture(). Used by the
+    /// harnesses to drive the interface through a sequence of states.
+    func load(_ json: String) {
+        data = try? JSONDecoder().decode(AppState.self, from: Data(json.utf8))
     }
 
     /// Short text for the menu bar icon. It favours the tightest limit,

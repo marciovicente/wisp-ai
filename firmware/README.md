@@ -1,25 +1,30 @@
 # Firmware — Waveshare ESP32-S3-Touch-AMOLED-2.16
 
-A placa é opcional. O app da barra de menu funciona sozinho; isto aqui é para
-quem quer o mascote numa telinha em cima da mesa.
+The board is optional. The menu bar app works on its own; this is for putting
+the mascot on a little screen on your desk.
+
+**If you only want to flash it, you do not need any of this.** Run `./flash.sh`
+from the repository root: it pulls a prebuilt binary and writes it with tools
+that come from PyPI, no ESP-IDF involved. This document is for changing the
+firmware.
 
 ## Hardware
 
-**ESP32-S3-Touch-AMOLED-2.16** — ESP32-S3R8 (8MB PSRAM octal, 16MB flash),
-AMOLED CO5300 480×480 por QSPI, touch CST9217, acelerômetro QMI8658, gerenciador
-de energia AXP2101, USB nativo.
+**ESP32-S3-Touch-AMOLED-2.16** — ESP32-S3R8 (8MB octal PSRAM, 16MB flash),
+CO5300 AMOLED 480×480 over QSPI, CST9217 touch, QMI8658 accelerometer, AXP2101
+power management, native USB.
 
-Alimentação: USB-C, ou bateria de lítio 3,7V no conector MX1.25 de 2 pinos.
+Power: USB-C, or a 3.7V lithium battery on the 2-pin MX1.25 connector.
 
-> **Polaridade.** O conector tem trava e só entra de um jeito, mas fabricantes
-> de bateria não padronizam qual fio vai em qual pino. Confira na serigrafia da
-> placa qual é o `+` e confirme que o vermelho cai nele **antes** de encaixar.
-> Invertido, danifica placa e célula.
+> **Polarity.** The connector is keyed and only goes in one way, but battery
+> manufacturers do not agree on which wire goes to which pin. Check the silk
+> screen for `+` and confirm the red wire lands on it **before** plugging it
+> in. Reversed, it damages both the board and the cell.
 
-## Pré-requisitos
+## Prerequisites
 
-ESP-IDF **v5.5 ou mais novo** — o BSP da Waveshare declara `idf: ">=5.5"` e não
-compila em 5.4.
+ESP-IDF **v5.5 or newer** — Waveshare's BSP declares `idf: ">=5.5"` and will
+not build on 5.4.
 
 ```bash
 git clone -b v5.5 --recursive https://github.com/espressif/esp-idf.git ~/esp/esp-idf
@@ -27,18 +32,19 @@ git clone -b v5.5 --recursive https://github.com/espressif/esp-idf.git ~/esp/esp
 source ~/esp/esp-idf/export.sh
 ```
 
-## Antes de gravar: guarde o firmware de fábrica
+## Before flashing: keep the factory firmware
 
-A placa vem com uma demonstração da Waveshare que você não recupera depois.
+The board ships with a Waveshare demo you cannot get back afterwards. The
+`./flash.sh` flow offers to save it for you; by hand it is:
 
 ```bash
-esptool.py --chip esp32s3 -p /dev/cu.usbmodem* read_flash 0 0x1000000 backup/factory-firmware-16MB.bin
+esptool.py --chip esp32s3 -p /dev/cu.usbmodem* read_flash 0 0x1000000 backup/waveshare-factory-16MB.bin
 ```
 
-Use a velocidade padrão. O USB da placa é nativo (não há chip conversor), então
-`--baud 921600` não acelera nada e provoca falha no meio da leitura.
+Use the default speed. The board's USB is native (there is no bridge chip), so
+`--baud 921600` buys nothing and provokes failures mid-read.
 
-## Compilar e gravar
+## Build and flash
 
 ```bash
 cd firmware
@@ -47,52 +53,59 @@ idf.py build
 idf.py -p /dev/cu.usbmodem* flash monitor
 ```
 
-Se a placa não aparecer em `/dev/cu.*`, confira se o cabo transmite dados —
-muito cabo USB-C só carrega. Sem enumerar no USB, não há como gravar.
+With a local build present in `firmware/build/`, `./flash.sh` uses yours
+instead of downloading a release — which is the fast path while developing.
 
-## Provisionar WiFi e token
+If the board does not show up under `/dev/cu.*`, check that the cable carries
+data — plenty of USB-C cables only charge. If it does not enumerate, there is
+nothing to flash.
 
-As credenciais nunca ficam no código: vão direto para a partição NVS.
+## Provisioning WiFi and the token
+
+Credentials never live in the source: they go straight into the NVS partition.
 
 ```bash
 /usr/bin/python3 ../bridge/provision_wifi.py
 ```
 
-Ele pergunta a rede, a senha (que não aparece na tela) e grava também o token
-que o bridge exige. Depois disso você pode fechar a rede:
+It asks for the network, the password (which does not appear on screen) and
+writes the token the bridge requires alongside them. This does not need
+ESP-IDF either. After that you can close the network:
 
 ```json
-// ~/.fagulha/config.json
-"exigir_token": true
+// ~/.wisp/config.json
+"require_token": true
 ```
 
-A placa só faz **2.4GHz**. Rede 5GHz-only não conecta nem com a senha certa.
+The board only does **2.4GHz**. A 5GHz-only network will not connect, correct
+password or not.
 
-## Como a placa acha o Mac
+## How the board finds the Mac
 
-Procura o serviço mDNS `_fagulha._tcp`, que o bridge publica. Isso não depende
-do nome da máquina — o macOS renomeia o computador sozinho quando detecta
-conflito na rede, e uma placa presa a um hostname vira órfã quando isso
-acontece. Como reserva, ela ainda tenta o hostname gravado na NVS.
+It looks for the `_wisp._tcp` mDNS service, which the bridge publishes. That
+does not depend on the machine's name — macOS renames the computer on its own
+when it detects a conflict on the network, and a board pinned to a hostname is
+orphaned when that happens. As a fallback it still tries the hostname stored
+in NVS.
 
-## Uso
+## Use
 
-- **Deslizar para o lado** — painel de consumo e limites
-- **Virar o aparelho** — a imagem gira junto, pelo acelerômetro
-- **Sem sessão ativa** — relógio e previsão do tempo
+- **Swipe sideways** — usage and limits panel
+- **Turn the device** — the image rotates with it, via the accelerometer
+- **No active session** — clock and weather forecast
 
-## Notas de implementação
+## Implementation notes
 
-Duas decisões não óbvias, medidas e não supostas:
+Two non-obvious decisions, measured rather than assumed:
 
-**Buffer de 16 linhas.** O `bsp_display_start()` fixa 50 linhas, o que faz o
-driver SPI alocar um buffer de rebote de 48KB em RAM interna. Sem WiFi cabe;
-com a pilha de rede ligada sobra pouco e vira `ESP_ERR_NO_MEM` no meio do
-desenho. Com 16 linhas o teto cai para 15KB e a tela volta a desenhar com a
-rede de pé — 66fps estáveis.
+**16-line buffer.** `bsp_display_start()` hardcodes 50 lines, which makes the
+SPI driver allocate a 48KB bounce buffer in internal RAM. Without WiFi it
+fits; with the network stack up there is little left and it turns into
+`ESP_ERR_NO_MEM` in the middle of a draw. At 16 lines the ceiling drops to
+15KB and the screen draws again with the network up — a stable 66fps.
 
-**Rotação por hardware.** O `lv_display_set_rotation()` do LVGL exige modo de
-render DIRECT ou FULL, e rodamos em PARTIAL por causa do item acima — ele
-apenas logava um aviso e não girava nada. A rotação usa o MADCTL do painel, o
-que custa zero de CPU. O touch precisa girar junto, ou o toque cai no lugar
-errado.
+**Rotation in hardware.** LVGL's `lv_display_set_rotation()` requires DIRECT
+or FULL render mode, and we run PARTIAL because of the item above — it only
+logged a warning and rotated nothing. Rotation uses the panel's MADCTL
+instead, which costs zero CPU. Touch has to rotate with it, or taps land in
+the wrong place.

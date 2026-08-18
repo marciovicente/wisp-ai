@@ -1,111 +1,201 @@
-# Fagulha
+# Wisp
 
-Um mascote que mostra o que o Claude Code está fazendo — na barra de menu do
-Mac, e opcionalmente numa telinha AMOLED em cima da sua mesa.
+A mascot that shows you what Claude Code is doing — in your Mac's menu bar,
+and optionally on a small AMOLED screen sitting on your desk.
 
-Cada sessão ativa do Claude vira um bonequinho com estado próprio: trabalhando,
-rodando ferramenta, esperando sua permissão, te fazendo uma pergunta, concluído,
-com erro. Quando não há nada rodando, a tela vira relógio e previsão do tempo —
-boneco parado não informa nada.
+Every active Claude session becomes a little character with its own state:
+working, running a tool, waiting for your permission, asking you a question,
+done, failed. When nothing is running the screen turns into a clock and a
+weather forecast — a motionless character tells you nothing.
 
-Na barra de menu você vê consumo, limites e as sessões abertas sem sair do que
-está fazendo.
+In the menu bar you get usage, subscription limits and your open sessions
+without leaving what you were doing.
 
-## Instalação
+## Install
+
+### On the Mac
 
 ```bash
-git clone https://github.com/USUARIO/fagulha.git
-cd fagulha
+curl -fsSL https://raw.githubusercontent.com/marciovicente/wisp-ai/main/install.sh | bash
+```
+
+Or, if you would rather read it before running it — and you should:
+
+```bash
+git clone https://github.com/marciovicente/wisp-ai.git
+cd wisp
 ./install.sh
 ```
 
-Precisa de macOS 14+, das ferramentas de linha de comando da Apple
-(`xcode-select --install`) e de mais nada.
+You need macOS 14+ and Apple's command line tools (`xcode-select --install`).
+Nothing else: the bridge runs on the Python that already ships with the
+system, and the app has no dependencies at all.
 
-**Por que compilar em vez de baixar um app pronto:** app baixado da internet
-recebe a marca de quarentena do macOS e, sem assinatura de desenvolvedor paga,
-o sistema recusa abrir com um aviso de malware. App compilado na sua máquina
-nunca recebe essa marca. Compilar aqui é o que *remove* a fricção, não o
-contrário — e de quebra você lê o que está rodando.
+The installer builds the app, installs it into `~/Applications`, generates
+your token, asks whether it may register the Claude Code hooks — keeping a
+copy of your `settings.json` first — and, if a board is plugged into USB,
+offers to flash it right there. It never asks for `sudo`, installs nothing
+globally and touches no system configuration.
 
-## O que ele faz na sua máquina
+**Why build instead of downloading a finished app:** an app downloaded from
+the internet gets macOS's quarantine flag, and without a paid developer
+signature the system refuses to open it with a malware warning. An app built
+on your own machine never gets that flag. Building here is what *removes* the
+friction, not the opposite — and you get to read what you are running.
 
-Transparência importa aqui, porque o app lê dados do seu Claude Code:
+### On the board (optional)
 
-| o quê | onde | por quê |
-|---|---|---|
-| lê os transcripts | `~/.claude/projects/**/*.jsonl` | contar requests e tokens |
-| lê o cache de limites | `~/.claude.json` | os percentuais da assinatura |
-| acrescenta hooks | `~/.claude/settings.json` | saber o que o Claude está fazendo |
-| grava configuração | `~/.fagulha/config.json` | token, porta, cidade |
-| sobe um servidor local | `127.0.0.1:4666` | a placa busca o estado aqui |
-
-Os hooks são acrescentados aos seus, nunca por cima, e o arquivo é copiado
-antes. `bridge/install_hook.py --dry-run` mostra o que mudaria; `--remove`
-desfaz.
-
-**Nada sai da sua máquina.** Não há telemetria, nem servidor nosso. As únicas
-conexões externas são a previsão do tempo (Open-Meteo, sem cadastro) e, uma vez
-só na instalação, a descoberta da sua cidade pelo IP.
-
-### Sobre a rede
-
-O bridge escuta na rede local porque a placa precisa alcançá-lo. Por isso ele
-exige um **token** de quem vem de fora — gerado sozinho na instalação e gravado
-na placa junto com o WiFi. Sem ele, qualquer pessoa na mesma rede leria seus
-nomes de projeto e seu consumo.
-
-Se você tiver uma placa gravada antes disso, `exigir_token: false` no config
-mantém ela funcionando, e o app mostra um aviso amarelo até você regravar.
-
-## Os limites da assinatura
-
-O app busca os percentuais **direto da Anthropic**, no mesmo endpoint que o
-Claude Code usa (`GET /api/oauth/usage`), a cada 5 minutos. São os mesmos
-números que aparecem no painel de uso do Claude Code, sem depender de você
-abri-lo.
-
-Para isso ele precisa da credencial do Claude Code, que fica no chaveiro do
-macOS. **Quem decide é o macOS**: na primeira vez aparece um diálogo pedindo
-sua autorização. O token nunca sai da sua máquina — vai num cabeçalho para
-`api.anthropic.com` e para lugar nenhum além disso, e o bridge sequer chega a
-vê-lo.
-
-Recusando, nada quebra: a opção se desliga sozinha (não insistimos), e o app
-volta a ler o cache que o Claude Code mantém em `~/.claude.json`. Esse cache
-tem prazo de 5 minutos, mas **só é reescrito quando algo dispara uma busca** —
-numa máquina de teste ele ficou três dias parado porque ninguém abriu o painel
-de uso. Quando é ele a fonte, o app mostra a idade ao lado do número e o
-esmaece, em vez de apresentar dado antigo como se fosse atual.
-
-Você pode desligar a busca a qualquer momento em **Buscar limites reais**, no
-painel.
-
-### Consumo calculado aqui
-
-Independente de tudo isso, o app calcula dos seus transcripts o consumo nas
-mesmas janelas (5h e 7 dias) e compara com o seu próprio pico dos últimos 30
-dias. Esse número não depende de credencial, de rede nem de cache: é sempre
-atual. Ele responde "hoje está fora do meu normal?", que é uma pergunta
-diferente — e às vezes mais útil — que "quanto falta para o teto?".
-
-## A placa (opcional)
-
-O app funciona sozinho. A telinha é o extra.
-
-Hardware: **Waveshare ESP32-S3-Touch-AMOLED-2.16** (480×480, touch, acelerômetro).
-Deslizando para o lado aparece o painel de consumo; virando o aparelho a imagem
-gira junto.
-
-Gravar exige ESP-IDF 5.5. Veja [firmware/README.md](firmware/README.md).
-
-## Desinstalar
+The app works on its own. The little screen is the extra. With the board
+plugged into USB:
 
 ```bash
-/usr/bin/python3 bridge/install_hook.py --remove   # tira os hooks
-rm -rf ~/Applications/Fagulha.app ~/.fagulha
+./flash.sh
 ```
 
-## Licença
+One command: it finds the board, saves Waveshare's factory firmware (which you
+cannot get back afterwards — it is not distributed anywhere), flashes Wisp and
+asks for your WiFi. The password is typed hidden and goes straight into the
+NVS partition along with the bridge token; it never passes through the source
+or through git.
+
+**You do not need ESP-IDF.** The binaries come ready from the GitHub release,
+and the two flashing tools (`esptool` and the NVS generator) are pulled from
+PyPI into a venv under `~/.wisp/tools` the first time — about 15MB, and they
+run on the Python 3.9 that macOS itself already ships. If you have a local
+build in `firmware/build/`, it uses yours instead of downloading.
+
+Building the firmware does require ESP-IDF 5.5 — but that only matters if you
+are going to change it. See [firmware/README.md](firmware/README.md).
+
+```bash
+./flash.sh --no-wifi      # firmware only; provision later
+./flash.sh --erase        # erase the flash first (board stuck in a boot loop)
+```
+
+Hardware: **Waveshare ESP32-S3-Touch-AMOLED-2.16** (480×480, touch,
+accelerometer). Swiping sideways brings up the usage panel; turning the device
+rotates the image with it. It only speaks 2.4GHz WiFi.
+
+## What it does on your machine
+
+Transparency matters here, because the app reads your Claude Code data:
+
+| what | where | why |
+|---|---|---|
+| reads the transcripts | `~/.claude/projects/**/*.jsonl` | counting requests and tokens |
+| reads the limits cache | `~/.claude.json` | the subscription percentages |
+| appends hooks | `~/.claude/settings.json` | knowing what Claude is doing |
+| writes configuration | `~/.wisp/config.json` | token, port, city |
+| copies the hook | `~/.wisp/hook.sh` | so you can delete the clone afterwards |
+| flashing tools | `~/.wisp/tools/` | only if you flash the board |
+| runs a local server | `127.0.0.1:4666` | the board fetches state from here |
+
+The hooks are appended to yours, never written over them, and the file is
+copied first. `bridge/install_hook.py --dry-run` shows what would change;
+`--remove` undoes it.
+
+**Nothing leaves your machine.** There is no telemetry and no server of ours.
+The only outbound connections are the weather forecast (Open-Meteo, no signup)
+and, once at install time, discovering your city from your IP.
+
+### About the network
+
+The bridge listens on the local network because the board has to reach it.
+That is why it demands a **token** from anything coming from outside —
+generated on its own at install time and written to the board along with the
+WiFi. Without it, anyone on the same network could read your project names and
+your usage.
+
+If you have a board flashed before this existed, `require_token: false` in the
+config keeps it working, and the app shows a yellow warning until you reflash.
+
+## Subscription limits
+
+The app fetches the percentages **straight from Anthropic**, on the same
+endpoint Claude Code uses (`GET /api/oauth/usage`), every 5 minutes. They are
+the same numbers you see in Claude Code's usage panel, without depending on
+you opening it.
+
+For that it needs the Claude Code credential, which lives in the macOS
+keychain. **macOS is the one who decides**: the first time, a dialog appears
+asking for your authorization. The token never leaves your machine — it goes
+in a header to `api.anthropic.com` and nowhere else, and the bridge never even
+sees it.
+
+If you decline, nothing breaks: the option turns itself off (we do not nag),
+and the app falls back to the cache Claude Code keeps in `~/.claude.json`.
+That cache has a 5-minute deadline, but **it is only rewritten when something
+triggers a fetch** — on a test machine it sat unchanged for three days because
+nobody opened the usage panel. When the cache is the source, the app shows its
+age next to the number and dims it, instead of presenting stale data as if it
+were current.
+
+You can turn the fetching off at any time under **Fetch real limits** in the
+panel.
+
+### Usage computed locally
+
+Independently of all that, the app computes usage from your transcripts over
+the same windows (5h and 7 days) and compares it against your own peak of the
+last 30 days. That number depends on no credential, no network and no cache:
+it is always current. It answers "is today outside my normal?", which is a
+different question — and sometimes a more useful one — than "how far am I from
+the ceiling?".
+
+## Next steps
+
+Ideas worth doing, roughly in the order they earn their keep. Nothing here is
+promised.
+
+**Support agents other than Claude Code.** The architecture already allows it:
+`hook.sh` only POSTs the event to `127.0.0.1:4666/hook`, and the whole state
+machine lives in the bridge. Adding an agent means mapping its events onto the
+seven states.
+
+- [ ] **Codex CLI** — nearly a drop-in. Its hooks ship the same vocabulary we
+      already use (`SessionStart`, `UserPromptSubmit`, `PreToolUse`,
+      `PostToolUse`, `PermissionRequest`, `Stop`), configured in
+      `~/.codex/hooks.json` or in `config.toml` under
+      `[features] codex_hooks = true`. The work is a second installer and a
+      payload adapter — the field names differ from Claude Code's.
+- [ ] **Cursor** — feasible with a translation layer. The vocabulary is
+      different (`beforeShellExecution`, `beforeMCPExecution`,
+      `beforeReadFile`, `afterFileEdit`, `stop`), so *tool*, *working* and
+      *done* map cleanly, *waiting for permission* comes out of
+      `beforeShellExecution`, and there is no session-start event — the
+      session would have to be born on the first event it sees. Hooks are
+      configured per project in `.cursor/hooks.json`.
+- [ ] **Gemini CLI and others** — not investigated yet.
+- [ ] One mascot per agent, so a screen with mixed sessions still tells you
+      *which* tool is doing what.
+
+**Making the board easier still.**
+
+- [ ] Flash from the browser with [ESP Web Tools](https://esphome.github.io/esp-web-tools/)
+      — WebSerial in Chrome/Edge, no terminal at all.
+- [ ] Over-the-air updates, so new firmware does not mean plugging in a cable.
+- [ ] A first-boot SoftAP portal as a fallback for WiFi provisioning.
+
+**Elsewhere.**
+
+- [ ] Usage and limits are Anthropic-specific today; they need a shape that
+      survives more than one provider.
+- [ ] Linux support for the bridge (the board side is already portable; the
+      port is just `/dev/ttyACM0`).
+- [ ] A ready-made mascot pack, so the vector character is a choice and not
+      the only option. See [MASCOTS.md](MASCOTS.md).
+
+## Uninstall
+
+```bash
+/usr/bin/python3 bridge/install_hook.py --remove   # removes the hooks
+rm -rf ~/Applications/Wisp.app ~/.wisp
+```
+
+Everything Wisp creates lives under those two paths. `--remove` also clears
+entries from an older install that pointed at the clone, and keeps a backup
+first.
+
+## License
 
 MIT.

@@ -1,31 +1,30 @@
-# Compilados — refeitos por ./install.sh e por idf.py build
+# Build output — rebuilt by ./install.sh and by idf.py build
 mac/build/
 firmware/build/
 
-# Ambiente virtual do ESP-IDF (esptool e companhia). Vem do instalador do
-# próprio ESP-IDF, não é nosso e pesa 45MB.
+# ESP-IDF's virtualenv (esptool and friends). It comes from ESP-IDF's own
+# installer, it is not ours, and it weighs 45MB.
 .venv/
 __pycache__/
 *.pyc
 
-# Componentes buscados pelo gerenciador do ESP-IDF a partir do
-# idf_component.yml. São 250MB de código de terceiros; versionar isso
-# inchava o repositório e ainda por cima congelava versões que o próprio
-# gerenciador sabe resolver.
+# Components fetched by ESP-IDF's manager from idf_component.yml. That is
+# 250MB of third-party code; versioning it bloated the repository and on top
+# of that froze versions the manager already knows how to resolve.
 firmware/managed_components/
 
-# Gerado a partir de sdkconfig.defaults, que ESTE sim é versionado.
-# O sdkconfig carrega caminhos absolutos da máquina de quem compilou.
+# Generated from sdkconfig.defaults, which IS versioned. The sdkconfig carries
+# absolute paths from whoever built it.
 firmware/sdkconfig
 firmware/sdkconfig.old
 
-# Dump da flash de fábrica da placa (16MB). É firmware proprietário da
-# Waveshare — não é nosso para redistribuir, e cada pessoa tira o seu antes
-# de gravar pela primeira vez.
+# Dump of the board's factory flash (16MB). It is Waveshare's proprietary
+# firmware — not ours to redistribute, and each person takes their own before
+# flashing for the first time.
 backup/
 
-# A configuração fica em ~/.fagulha/config.json, fora daqui de propósito,
-# porque guarda o token. Esta linha existe caso alguém a copie para cá.
+# The configuration lives in ~/.wisp/config.json, outside here on purpose,
+# because it holds the token. This line exists in case someone copies it here.
 config.json
 *.token
 

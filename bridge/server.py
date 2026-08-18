@@ -91,6 +91,22 @@ MAX_SESSOES = 4
 # Uma sessao so aparece na tela enquanto esta ATIVA. Parou de iterar por
 # esse tempo, some — sessao aberta e esquecida nao e informacao, e poluicao.
 SESSAO_ATIVA_S = 30
+# Estados em que a sessao NAO expira por inatividade.
+#
+# Uma sessao travada esperando voce para de emitir hooks — e exatamente isso
+# que "travado" significa. Com a regra de 30 segundos ela era considerada
+# inativa e sumia da tela, entrando o relogio no lugar. O estado que mais
+# precisa ser visto era o primeiro a desaparecer.
+#
+# Estes ficam ate voce responder, ate outro evento sobrescrever, ou ate a
+# sessao morrer de vez. ERRO entra junto: falha que some sozinha em meio
+# minuto e falha que voce nao viu.
+BLOQUEADOS = {ASKING, WAITING, ERROR}
+# ...mas nao para sempre. Um pedido sem resposta por 15 minutos e um pedido
+# orfao: voce saiu, a sessao morreu sem avisar, ou a resposta veio por um
+# caminho que nao dispara hook. Estado travado eterno para de ser informacao e
+# vira ruido — pior ainda, ruido que parece urgente.
+BLOQUEADO_MAX_S = 15 * 60
 # Depois disso descartamos da memoria: o terminal provavelmente morreu sem
 # disparar SessionEnd (fechou a aba, caiu o ssh).
 SESSAO_MORTA_S = 3 * 3600
@@ -220,7 +236,9 @@ class State:
             # So as ATIVAS vao para a tela. As demais continuam na memoria
             # (voltam sozinhas se houver novo evento), apenas nao aparecem.
             vivas = [v for v in self.sessoes.values()
-                     if now - v["last_event"] <= SESSAO_ATIVA_S]
+                     if now - v["last_event"] <= SESSAO_ATIVA_S
+                     or (v["status"] in BLOQUEADOS
+                         and now - v["last_event"] <= BLOQUEADO_MAX_S)]
             # Mais recentes primeiro: com pouco espaco, quem trabalha agora
             # importa mais que quem parou ha 25 segundos.
             ordenadas = sorted(vivas, key=lambda v: -v["last_event"])[:MAX_SESSOES]

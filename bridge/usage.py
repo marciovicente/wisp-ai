@@ -1,20 +1,20 @@
 """
-Agrega consumo de tokens do Claude Code a partir dos transcripts em ~/.claude/projects.
+Aggregates Claude Code token usage from the transcripts in ~/.claude/projects.
 
-Sem dependências externas — só stdlib.
+No external dependencies — stdlib only.
 
-Preços: tabela oficial Anthropic (USD por 1M tokens), input/output.
-Cache: leitura ~0.1x do input; escrita 1.25x (TTL 5m) ou 2x (TTL 1h).
+Pricing: Anthropic's official table (USD per 1M tokens), input/output.
+Cache: reads ~0.1x of input; writes 1.25x (5m TTL) or 2x (1h TTL).
 
-ATENÇÃO: se você usa Claude Code por assinatura (Pro/Max), você NÃO é cobrado
-por token. O custo abaixo é uma estimativa do "preço de tabela" (list price) —
-serve para comparar sessões e modelos, não é a sua fatura.
+NOTE: if you use Claude Code on a subscription (Pro/Max), you are NOT billed
+per token. The cost below is a list-price estimate — useful for comparing
+sessions and models, not your invoice.
 """
 
 
-# Anotacoes preguicosas: deixa o modulo rodar no Python 3.9 do sistema
-# (/usr/bin/python3), que nunca muda e nao depende do asdf. Sem isto,
-# `str | None` e avaliado na definicao da funcao e explode no 3.9.
+# Lazy annotations: lets the module run on the system Python 3.9
+# (/usr/bin/python3), which never changes and does not depend on asdf. Without
+# this, `str | None` is evaluated at definition time and blows up on 3.9.
 from __future__ import annotations
 
 import json
@@ -25,7 +25,7 @@ from pathlib import Path
 
 PROJECTS_DIR = Path.home() / ".claude" / "projects"
 
-# USD por 1M tokens: (input, output)
+# USD per 1M tokens: (input, output)
 PRICING = {
     "claude-fable-5": (10.00, 50.00),
     "claude-mythos-5": (10.00, 50.00),
@@ -46,7 +46,7 @@ CACHE_WRITE_1H_MULT = 2.0
 
 
 def _price(model: str):
-    """Resolve preço, tolerando sufixos de data (claude-haiku-4-5-20251001)."""
+    """Resolves pricing, tolerating date suffixes (claude-haiku-4-5-20251001)."""
     if model in PRICING:
         return PRICING[model]
     for known, p in PRICING.items():
@@ -63,7 +63,7 @@ def _cost(model: str, u: dict) -> float:
     cc = u.get("cache_creation") or {}
     w1h = cc.get("ephemeral_1h_input_tokens", 0)
     w5m = cc.get("ephemeral_5m_input_tokens", 0)
-    # fallback quando o detalhamento por TTL não existe
+    # fallback for when the per-TTL breakdown is missing
     if not (w1h or w5m):
         w5m = u.get("cache_creation_input_tokens", 0)
     return (
@@ -83,7 +83,7 @@ def _blank():
 
 
 def collect(since_days: int | None = None) -> dict:
-    """Varre os transcripts e agrega. since_days=None varre tudo."""
+    """Scans the transcripts and aggregates. since_days=None scans everything."""
     cutoff = None
     if since_days is not None:
         cutoff = datetime.now(timezone.utc) - timedelta(days=since_days)
@@ -95,7 +95,7 @@ def collect(since_days: int | None = None) -> dict:
     files_read = 0
 
     if not PROJECTS_DIR.is_dir():
-        return {"error": f"não encontrei {PROJECTS_DIR}"}
+        return {"error": f"could not find {PROJECTS_DIR}"}
 
     for path in PROJECTS_DIR.rglob("*.jsonl"):
         if cutoff and datetime.fromtimestamp(path.stat().st_mtime, timezone.utc) < cutoff:
@@ -116,8 +116,8 @@ def collect(since_days: int | None = None) -> dict:
                     if not u:
                         continue
 
-                    # dedup: uma requisição pode aparecer em vários arquivos
-                    # (resume de sessão, sidechains, compactação)
+                    # dedup: one request can show up in several files
+                    # (session resume, sidechains, compaction)
                     key = d.get("requestId") or msg.get("id") or d.get("uuid")
                     if key in seen:
                         continue
@@ -175,20 +175,20 @@ if __name__ == "__main__":
         raise SystemExit(1)
 
     t = r["total"]
-    scope = f"últimos {days} dias" if days else "tudo"
-    print(f"=== CONSUMO ({scope}) — {elapsed:.2f}s, {r['files_read']} arquivos ===")
-    print(f"requisições : {t['requests']:,}")
+    scope = f"last {days} days" if days else "everything"
+    print(f"=== USAGE ({scope}) — {elapsed:.2f}s, {r['files_read']} files ===")
+    print(f"requests    : {t['requests']:,}")
     print(f"input       : {t['input']:,}")
     print(f"output      : {t['output']:,}")
     print(f"cache read  : {t['cache_read']:,}")
     print(f"cache write : {t['cache_write']:,}")
-    print(f"custo (list): ${t['cost']:,.2f}")
+    print(f"cost (list) : ${t['cost']:,.2f}")
 
-    print("\n--- por modelo ---")
+    print("\n--- by model ---")
     for m, b in sorted(r["by_model"].items(), key=lambda kv: -kv[1]["cost"]):
         print(f"{m:<28} {b['requests']:>6} req  out {b['output']:>10,}  ${b['cost']:>9,.2f}")
 
-    print("\n--- últimos 7 dias ---")
+    print("\n--- last 7 days ---")
     for d in sorted(r["by_day"])[-7:]:
         b = r["by_day"][d]
         print(f"{d}  {b['requests']:>5} req  ${b['cost']:>8,.2f}")

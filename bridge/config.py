@@ -1,19 +1,19 @@
 """
-Configuração por usuário. Nada de específico de uma máquina no código.
+Per-user configuration. Nothing machine-specific in the source.
 
-Vive em ~/.fagulha/config.json, criado no primeiro uso com valores sensatos.
-O arquivo é 0600 porque guarda o token de acesso ao bridge.
+Lives in ~/.wisp/config.json, created on first use with sensible values.
+The file is 0600 because it holds the bridge access token.
 
-POR QUE ISTO EXISTE
--------------------
-Até agora o hostname do Mac de uma pessoa estava cravado no anuncio.py e São
-Paulo estava cravada no weather.py. Funciona numa máquina; é lixo em todas as
-outras. Publicar assim significaria cada usuário editando código-fonte pra
-mudar a cidade.
+WHY THIS EXISTS
+---------------
+Until now one person's Mac hostname was hardcoded in announce.py and São Paulo
+was hardcoded in weather.py. That works on one machine; it is garbage on every
+other one. Publishing like that would mean every user editing source code to
+change their city.
 
-E o mais sério: o bridge escuta na rede local e serve nomes de projeto e
-consumo pra quem pedir. Numa rede de coworking isso é leitura livre. O token
-aqui resolve — a placa manda, mais ninguém tem.
+And the more serious part: the bridge listens on the local network and serves
+project names and usage to whoever asks. On a coworking network that is a free
+read. The token here fixes it — the board sends it, nobody else has it.
 """
 
 from __future__ import annotations
@@ -24,113 +24,115 @@ import secrets
 import urllib.request
 from pathlib import Path
 
-PASTA = Path.home() / ".fagulha"
-ARQUIVO = PASTA / "config.json"
+FOLDER = Path.home() / ".wisp"
+FILE = FOLDER / "config.json"
 
-PADRAO = {
-    "porta": 4666,
+DEFAULTS = {
+    "port": 4666,
 
-    # Token que a placa apresenta em cada consulta. Gerado no primeiro uso.
+    # Token the board presents on every request. Generated on first use.
     "token": "",
 
-    # Com token exigido, /state só responde a quem apresentar o segredo.
-    # Instalação nova nasce em true. Fica false apenas enquanto houver uma
-    # placa gravada com firmware antigo, que ainda não sabe mandar o token.
-    "exigir_token": True,
+    # With the token required, /state only answers whoever presents the secret.
+    # A fresh install is born true. It only goes false while there is a board
+    # running old firmware that does not know how to send the token yet.
+    "require_token": True,
 
-    # Previsão do tempo. Sem isto o bridge tenta descobrir pelo IP no primeiro
-    # uso; falhando, o relógio aparece sem temperatura.
-    "tempo": {"lat": None, "lon": None, "nome": ""},
+    # Weather forecast. Without this the bridge tries to figure it out from
+    # your IP on first use; failing that, the clock shows up with no
+    # temperature.
+    "weather": {"lat": None, "lon": None, "name": ""},
 
-    # Hostnames antigos a republicar por mDNS, para placas já gravadas
-    # continuarem achando o bridge depois que o macOS renomeia a máquina.
-    "hostnames_legados": [],
+    # Old hostnames to republish over mDNS, so already-flashed boards keep
+    # finding the bridge after macOS renames the machine.
+    "legacy_hostnames": [],
 }
 
 
-def _detectar_local() -> dict:
+def _detect_location() -> dict:
     """
-    Descobre a cidade pelo IP público, uma vez só, no primeiro uso.
+    Finds the city from the public IP, once, on first use.
 
-    É a diferença entre "funciona sozinho" e "edite um JSON antes de usar".
-    Uma chamada, gravada pra sempre. Falhando, o tempo simplesmente não
-    aparece — nunca é motivo pra derrubar nada.
+    It is the difference between "it just works" and "edit a JSON before using
+    it". One call, saved forever. If it fails the weather simply does not show
+    up — it is never a reason to bring anything down.
     """
     try:
         req = urllib.request.Request(
             "http://ip-api.com/json/?fields=status,city,lat,lon",
-            headers={"User-Agent": "fagulha"})
+            headers={"User-Agent": "wisp"})
         with urllib.request.urlopen(req, timeout=6) as r:
             d = json.loads(r.read())
         if d.get("status") == "success":
-            return {"lat": d["lat"], "lon": d["lon"], "nome": d.get("city", "")}
+            return {"lat": d["lat"], "lon": d["lon"], "name": d.get("city", "")}
     except Exception:
         pass
-    return {"lat": None, "lon": None, "nome": ""}
+    return {"lat": None, "lon": None, "name": ""}
 
 
-def _fundir(base: dict, novo: dict) -> dict:
-    """Mantém as chaves que o usuário já tem e acrescenta as que faltarem."""
-    saida = dict(base)
-    for k, v in (novo or {}).items():
-        if isinstance(v, dict) and isinstance(saida.get(k), dict):
-            saida[k] = _fundir(saida[k], v)
+def _merge(base: dict, new: dict) -> dict:
+    """Keeps the keys the user already has and adds the missing ones."""
+    out = dict(base)
+    for k, v in (new or {}).items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = _merge(out[k], v)
         else:
-            saida[k] = v
-    return saida
+            out[k] = v
+    return out
 
 
 _cache: dict | None = None
 
 
-def ler(recarregar: bool = False) -> dict:
+def read(reload: bool = False) -> dict:
     global _cache
-    if _cache is not None and not recarregar:
+    if _cache is not None and not reload:
         return _cache
 
-    atual = {}
-    if ARQUIVO.exists():
+    current = {}
+    if FILE.exists():
         try:
-            atual = json.loads(ARQUIVO.read_text())
+            current = json.loads(FILE.read_text())
         except (OSError, json.JSONDecodeError):
-            atual = {}
+            current = {}
 
-    cfg = _fundir(PADRAO, atual)
-    mudou = cfg != atual
+    cfg = _merge(DEFAULTS, current)
+    changed = cfg != current
 
     if not cfg["token"]:
-        # 32 bytes urlsafe: sobra pra uma rede local e cabe num header.
+        # 32 urlsafe bytes: plenty for a local network and small enough for a
+        # header.
         cfg["token"] = secrets.token_urlsafe(24)
-        mudou = True
+        changed = True
 
-    t = cfg["tempo"]
-    if t.get("lat") is None and "tempo_detectado" not in atual:
-        cfg["tempo"] = _detectar_local()
-        # Marca a tentativa mesmo se falhou: não insistimos a cada boot.
-        cfg["tempo_detectado"] = True
-        mudou = True
+    w = cfg["weather"]
+    if w.get("lat") is None and "weather_detected" not in current:
+        cfg["weather"] = _detect_location()
+        # Record the attempt even if it failed: we do not retry on every boot.
+        cfg["weather_detected"] = True
+        changed = True
 
-    if mudou:
-        gravar(cfg)
+    if changed:
+        write(cfg)
 
     _cache = cfg
     return cfg
 
 
-def gravar(cfg: dict) -> None:
-    PASTA.mkdir(mode=0o700, parents=True, exist_ok=True)
-    tmp = ARQUIVO.with_suffix(".tmp")
+def write(cfg: dict) -> None:
+    FOLDER.mkdir(mode=0o700, parents=True, exist_ok=True)
+    tmp = FILE.with_suffix(".tmp")
     tmp.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
-    os.chmod(tmp, 0o600)   # guarda o token
-    tmp.replace(ARQUIVO)
+    os.chmod(tmp, 0o600)   # it holds the token
+    tmp.replace(FILE)
 
 
 if __name__ == "__main__":
-    c = ler()
-    print(f"config: {ARQUIVO}")
-    print(f"  porta         : {c['porta']}")
+    c = read()
+    print(f"config: {FILE}")
+    print(f"  port          : {c['port']}")
     print(f"  token         : {c['token'][:6]}… ({len(c['token'])} chars)")
-    print(f"  exigir_token  : {c['exigir_token']}")
-    t = c["tempo"]
-    print(f"  tempo         : {t['nome'] or '—'} ({t['lat']}, {t['lon']})")
-    print(f"  legados       : {c['hostnames_legados'] or '—'}")
+    print(f"  require_token : {c['require_token']}")
+    w = c["weather"]
+    print(f"  weather       : {w['name'] or '—'} ({w['lat']}, {w['lon']})")
+    print(f"  legacy        : {c['legacy_hostnames'] or '—'}")

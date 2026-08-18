@@ -1,18 +1,18 @@
 """
-Previsão do tempo para a tela ociosa.
+Weather forecast for the idle screen.
 
-Usa a Open-Meteo: gratuita, sem cadastro e sem chave de API — por isso não há
-segredo nenhum para guardar aqui. A busca acontece NO MAC, não na placa: o
-ESP32 não precisa falar HTTPS nem embutir certificados, e a localização fica
-definida em um lugar só.
+Uses Open-Meteo: free, no signup and no API key — which is why there is no
+secret to keep here. The fetch happens ON THE MAC, not on the board: the ESP32
+does not have to speak HTTPS or embed certificates, and the location is defined
+in exactly one place.
 
-Só stdlib.
+Stdlib only.
 """
 
 
-# Anotacoes preguicosas: deixa o modulo rodar no Python 3.9 do sistema
-# (/usr/bin/python3), que nunca muda e nao depende do asdf. Sem isto,
-# `str | None` e avaliado na definicao da funcao e explode no 3.9.
+# Lazy annotations: lets the module run on the system Python 3.9
+# (/usr/bin/python3), which never changes and does not depend on asdf. Without
+# this, `str | None` is evaluated at definition time and blows up on 3.9.
 from __future__ import annotations
 
 import json
@@ -23,24 +23,24 @@ import urllib.request
 
 import config
 
-ATUALIZA_S = 900        # 15 min: o tempo não muda mais rápido que isso
+REFRESH_S = 900        # 15 min: the weather does not change faster than that
 TIMEOUT_S = 8
 
 
 def _url() -> str | None:
     """
-    Monta a consulta a partir da configuração do usuário.
+    Builds the query from the user's configuration.
 
-    A cidade saía cravada aqui (São Paulo). Agora vem do config.json, que a
-    descobre sozinho pelo IP no primeiro uso — quem instala não edita nada.
-    Sem coordenadas, devolvemos None e o relógio aparece sem temperatura;
-    é degradação, não erro.
+    The city used to be hardcoded here (São Paulo). Now it comes from
+    config.json, which discovers it from the IP on first use — whoever installs
+    edits nothing. Without coordinates we return None and the clock shows up
+    without a temperature; that is degradation, not an error.
 
-    `timezone=auto` deixa o próprio Open-Meteo deduzir o fuso das coordenadas,
-    o que evita carregarmos uma tabela de fusos só pra isso.
+    `timezone=auto` lets Open-Meteo itself derive the timezone from the
+    coordinates, which saves us carrying a timezone table just for this.
     """
-    t = config.ler().get("tempo") or {}
-    lat, lon = t.get("lat"), t.get("lon")
+    w = config.read().get("weather") or {}
+    lat, lon = w.get("lat"), w.get("lon")
     if lat is None or lon is None:
         return None
     return (
@@ -52,9 +52,9 @@ def _url() -> str | None:
         "&forecast_days=1"
     )
 
-# WMO weather code -> rótulo curto (cabe na tela) e ASCII (fonte sem acento).
-# Tabela oficial: https://open-meteo.com/en/docs
-_CODIGOS = [
+# WMO weather code -> short label (fits the screen) and ASCII (the embedded
+# font has no accents). Official table: https://open-meteo.com/en/docs
+_CODES = [
     ({0}, "clear"),
     ({1, 2}, "partly cloudy"),
     ({3}, "cloudy"),
@@ -67,95 +67,95 @@ _CODIGOS = [
 ]
 
 
-def _rotulo(codigo) -> str:
-    for cods, nome in _CODIGOS:
-        if codigo in cods:
-            return nome
+def _label(code) -> str:
+    for codes, name in _CODES:
+        if code in codes:
+            return name
     return "-"
 
 
-# Codigo WMO -> icone que o firmware sabe desenhar. Mantemos o conjunto
-# pequeno de proposito: cada icone e desenhado por primitivas no ESP32, entao
-# variedade custa codigo. Condicoes proximas caem no mesmo desenho.
-def _icone(codigo, is_day: bool) -> str:
-    if codigo in (0, 1):
+# WMO code -> an icon the firmware knows how to draw. We keep the set small on
+# purpose: every icon is drawn from primitives on the ESP32, so variety costs
+# code. Nearby conditions fall onto the same drawing.
+def _icon(code, is_day: bool) -> str:
+    if code in (0, 1):
         return "sun" if is_day else "moon"
-    if codigo == 2:
+    if code == 2:
         return "cloudsun" if is_day else "cloudmoon"
-    if codigo in (3, 45, 48):
+    if code in (3, 45, 48):
         return "cloud"
-    if codigo in (71, 73, 75, 77, 85, 86):
+    if code in (71, 73, 75, 77, 85, 86):
         return "snow"
-    if codigo in (95, 96, 99):
+    if code in (95, 96, 99):
         return "storm"
-    if codigo is None:
+    if code is None:
         return "cloud"
     return "rain"
 
 
-class Tempo:
-    """Busca em background e serve o último resultado bom."""
+class Weather:
+    """Fetches in the background and serves the last good result."""
 
     def __init__(self):
         self._lock = threading.Lock()
-        self._dados = None
-        self._buscado_em = 0.0
-        self._erros = 0
+        self._data = None
+        self._fetched_at = 0.0
+        self._errors = 0
 
-    def iniciar(self) -> None:
-        threading.Thread(target=self._laco, daemon=True).start()
+    def start(self) -> None:
+        threading.Thread(target=self._loop, daemon=True).start()
 
-    def _laco(self) -> None:
+    def _loop(self) -> None:
         while True:
             try:
                 url = _url()
                 if not url:
-                    # Sem coordenadas configuradas: dormimos e tentamos de
-                    # novo, caso o usuário preencha o config depois.
-                    time.sleep(ATUALIZA_S)
+                    # No coordinates configured: sleep and try again, in case
+                    # the user fills the config in later.
+                    time.sleep(REFRESH_S)
                     continue
                 with urllib.request.urlopen(url, timeout=TIMEOUT_S) as r:
                     d = json.load(r)
-                atual = d.get("current") or {}
-                diario = d.get("daily") or {}
-                dia = bool(atual.get("is_day", 1))
-                novo = {
-                    "t": round(atual.get("temperature_2m", 0)),
-                    "c": _rotulo(atual.get("weather_code")),
-                    "i": _icone(atual.get("weather_code"), dia),
-                    "hi": round((diario.get("temperature_2m_max") or [0])[0]),
-                    "lo": round((diario.get("temperature_2m_min") or [0])[0]),
+                current = d.get("current") or {}
+                daily = d.get("daily") or {}
+                day = bool(current.get("is_day", 1))
+                fresh = {
+                    "t": round(current.get("temperature_2m", 0)),
+                    "c": _label(current.get("weather_code")),
+                    "i": _icon(current.get("weather_code"), day),
+                    "hi": round((daily.get("temperature_2m_max") or [0])[0]),
+                    "lo": round((daily.get("temperature_2m_min") or [0])[0]),
                 }
                 with self._lock:
-                    self._dados = novo
-                    self._buscado_em = time.time()
-                    self._erros = 0
+                    self._data = fresh
+                    self._fetched_at = time.time()
+                    self._errors = 0
             except (urllib.error.URLError, OSError, ValueError, KeyError) as exc:
                 with self._lock:
-                    self._erros += 1
-                # Mantém o último valor bom: tempo de 15 min atrás ainda é
-                # melhor do que tela vazia. Só desiste depois de muita falha.
-                if self._erros == 1:
-                    print(f"[weather] falhou: {exc}")
-            time.sleep(ATUALIZA_S)
+                    self._errors += 1
+                # Keep the last good value: weather from 15 minutes ago still
+                # beats an empty screen. It only gives up after many failures.
+                if self._errors == 1:
+                    print(f"[weather] failed: {exc}")
+            time.sleep(REFRESH_S)
 
-    def ler(self) -> dict | None:
+    def read(self) -> dict | None:
         with self._lock:
-            if not self._dados:
+            if not self._data:
                 return None
-            # Depois de ~2h sem atualizar, o dado deixa de ser informação.
-            if time.time() - self._buscado_em > 7200:
+            # After ~2h without an update, the data stops being information.
+            if time.time() - self._fetched_at > 7200:
                 return None
-            return dict(self._dados)
+            return dict(self._data)
 
 
 if __name__ == "__main__":
-    t = Tempo()
-    t.iniciar()
+    w = Weather()
+    w.start()
     for _ in range(20):
-        if (d := t.ler()):
-            print(f"agora {d['t']}C ({d['c']}) [{d['i']}]   max {d['hi']}C  min {d['lo']}C")
+        if (d := w.read()):
+            print(f"now {d['t']}C ({d['c']}) [{d['i']}]   high {d['hi']}C  low {d['lo']}C")
             break
         time.sleep(1)
     else:
-        print("não consegui buscar a previsão")
+        print("could not fetch the forecast")

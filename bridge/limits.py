@@ -129,15 +129,15 @@ def normalize(utilization, age_s: int) -> dict:
             "label": label,
             "pct": int(pct),
             "resets_in": _fmt_reset(item.get("resets_at"), now),
-            # Janela VENCIDA: o horario de reset ja passou, entao esta
-            # porcentagem descreve um periodo que nao existe mais. So acontece
-            # com dado de cache — ao vivo, "resets_at" no passado seria uma
-            # corrida de segundos.
+            # EXPIRED window: the reset time has already passed, so this
+            # percentage describes a period that no longer exists. It only
+            # happens with cached data — live, a "resets_at" in the past would
+            # be a race of seconds.
             #
-            # Importa porque o numero nao fica apenas velho: ele fica ERRADO
-            # numa direcao previsivel. Depois de um reset o consumo real cai,
-            # entao um "52%" vencido assusta a toa. Melhor dizer que nao
-            # sabemos do que dizer um numero que sabemos estar errado.
+            # It matters because the number does not merely go stale: it goes
+            # WRONG in a predictable direction. After a reset the real usage
+            # drops, so an expired "52%" alarms you for nothing. Better to say
+            # we do not know than to say a number we know is wrong.
             "expired": _fmt_reset(item.get("resets_at"), now) == "now",
             "severity": sev,
             "color": SEVERITY_COLOR.get(sev, SEVERITY_COLOR["normal"]),

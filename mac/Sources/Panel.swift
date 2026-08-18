@@ -44,16 +44,16 @@ struct LimitBar: View {
                 Text(limit.l)
                     .font(.system(size: 11, weight: limit.a ? .semibold : .regular))
                 Spacer(minLength: 4)
-                // Janela vencida não mostra número.
+                // An expired window shows no number.
                 //
-                // Depois de um reset o consumo real CAI, então o valor em
-                // cache não é só velho: ele erra para cima, e assusta à toa.
-                // Um traço diz "não sabemos" — que é a verdade — em vez de
-                // um número que sabemos estar errado.
+                // After a reset the real usage DROPS, so the cached value is
+                // not merely stale: it errs upward, and alarms you for
+                // nothing. A dash says "we do not know" — which is the truth —
+                // instead of a number we know to be wrong.
                 Text(limit.expired ? "—" : "\(limit.p)%")
                     .font(.system(size: 11, weight: .medium).monospacedDigit())
                     .foregroundStyle(limit.expired || !trustworthy ? .tertiary : .primary)
-                Text(limit.expired ? "vencido" : limit.r)
+                Text(limit.expired ? "expired" : limit.r)
                     .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
                     .frame(width: 44, alignment: .trailing)
@@ -61,8 +61,8 @@ struct LimitBar: View {
             GeometryReader { g in
                 ZStack(alignment: .leading) {
                     Capsule().fill(Color.primary.opacity(0.08))
-                    // Sem barra na janela vencida: a barra é a afirmação mais
-                    // forte da tela, e não há nada a afirmar.
+                    // No bar on an expired window: the bar is the strongest
+                    // claim on the screen, and there is nothing to claim.
                     if !limit.expired {
                         Capsule()
                             .fill(Palette.severity(limit.s).opacity(trustworthy ? 1 : 0.35))

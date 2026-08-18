@@ -39,6 +39,8 @@ enum Limits {
         /// We keep the value because a 429 without a backoff becomes a
         /// permanent 429.
         case http(Int, TimeInterval?)
+        /// Read from the credential itself, not guessed from a status code.
+        case expired(Date)
         case network(String)
 
         var description: String {
@@ -53,8 +55,16 @@ enum Limits {
                 return "keychain refused (status \(s))"
             case .noToken:
                 return "credential has no access token"
+            case .expired(let at):
+                let f = DateFormatter()
+                f.dateFormat = "dd/MM HH:mm"
+                return "credential expired at \(f.string(from: at)) — open Claude Code"
             case .http(401, _), .http(403, _):
-                return "credential expired — open Claude Code"
+                // NOT "expired". This code said exactly that for a long time
+                // and it was wrong: the credential was valid and the token
+                // being sent belonged to another service. Report what the
+                // server said and let the reader draw the conclusion.
+                return "Anthropic rejected the credential (401/403)"
             case .http(let c, _):
                 return "Anthropic answered \(c)"
             case .network(let m):
@@ -77,10 +87,39 @@ enum Limits {
         guard status == errSecSuccess, let data = item as? Data else {
             throw Failure.noCredential(status)
         }
-        guard let raw = try? JSONSerialization.jsonObject(with: data),
-              let t = find(raw, key: "accessToken") else {
+        guard let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw Failure.noToken
         }
+
+        // The Claude entry EXPLICITLY, not "the first accessToken anywhere".
+        //
+        // This keychain item is shared. Besides claudeAiOauth it now holds
+        // mcpOAuth — one OAuth grant per connected MCP server, each with its
+        // own accessToken. The depth-first search below happily returned one
+        // of those, and a Sentry token sent to api.anthropic.com comes back
+        // "Invalid bearer token".
+        //
+        // The cost of that was not a broken feature, it was a LYING one: the
+        // 401 got reported as "credential expired — open Claude Code", so the
+        // fix on offer was to re-login and repair something that was never
+        // broken. Measured: the credential had 2.2 hours left, and the right
+        // token answered 200 on the first try.
+        if let claude = raw["claudeAiOauth"] as? [String: Any] {
+            if let expira = claude["expiresAt"] as? Double,
+               Date(timeIntervalSince1970: expira / 1000) < Date() {
+                // Say it only when it is TRUE — and do not spend a request to
+                // find out something we can read locally.
+                throw Failure.expired(Date(timeIntervalSince1970: expira / 1000))
+            }
+            if let t = find(claude, key: "accessToken") { return t }
+        }
+
+        // No claudeAiOauth: fall back to the old depth search, but with the
+        // MCP subtree removed. Keeps the resilience to renesting that the
+        // search was written for, without the contamination that made it wrong.
+        var semMcp = raw
+        semMcp.removeValue(forKey: "mcpOAuth")
+        guard let t = find(semMcp, key: "accessToken") else { throw Failure.noToken }
         return t
     }
 

@@ -149,6 +149,16 @@ ok "$DEST/Wisp.app"
 # from your IP.
 /usr/bin/python3 "$ROOT/bridge/config.py" | sed 's/^/   /'
 
+# The Terminal character, the same art the board draws. Without this the Mac
+# falls back to the built-in vector and the two halves of the project look
+# like different products. Copied, not linked, so deleting the clone does not
+# take the mascot with it.
+ARTE="$HOME/.wisp/mascots/terminal"
+if [[ ! -f "$ARTE/idle.png" ]]; then
+    mkdir -p "$ARTE"
+    cp "$ROOT"/firmware/assets/*.png "$ARTE"/ 2>/dev/null && ok "mascot installed"
+fi
+
 # ————————————————————————————————— 4. Claude Code hooks
 
 echo

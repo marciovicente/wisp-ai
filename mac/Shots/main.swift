@@ -60,6 +60,13 @@ func write<V: View>(_ view: V, _ name: String, scale: CGFloat = 2, opaque: Bool 
 }
 
 MainActor.assumeIsolated {
+    // Render from the art the repository ships, not from ~/.wisp/mascots.
+    // Otherwise these images depend on what happens to be installed on the
+    // machine that generated them — and anybody regenerating them gets a
+    // different README.
+    Sprites.folder = URL(fileURLWithPath: "firmware")
+    Sprites.chosen = "assets"
+
     let bridge = Bridge.fixture(panelJSON)
 
     // The panel, on the material background the menu bar gives it — rendered

@@ -20,7 +20,11 @@ import AppKit
 /// animation would be invisible work.
 enum Sprites {
 
-    static let folder = FileManager.default.homeDirectoryForCurrentUser
+    /// A var, not a let, for one reason: mac/shots.sh points it at the
+    /// repository's own firmware/assets so the documentation images render
+    /// from art that ships here, instead of from whatever happens to be
+    /// installed on the machine that generated them.
+    static var folder = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".wisp/mascots", isDirectory: true)
 
     /// The state's name as a file name. These are the same names that travel
@@ -40,7 +44,30 @@ enum Sprites {
 
     /// Which set to use. Empty = the built-in vector.
     static var chosen: String {
-        get { UserDefaults.standard.string(forKey: "mascot") ?? "" }
+        get {
+            let d = UserDefaults.standard
+            if let n = d.string(forKey: "mascot") { return n }
+            // Key from before the Fagulha -> Wisp rename.
+            //
+            // Renaming the key silently discarded the choice: the picker fell
+            // back to the built-in vector and nothing said why. Same shape as
+            // the NVS namespace on the board — renames are consistent inside
+            // the repo and blind to state stored outside it.
+            //
+            // Adopt it once, then write under the new name so this path stops
+            // being taken.
+            if let previous = d.string(forKey: "mascote"), !previous.isEmpty {
+                d.set(previous, forKey: "mascot")
+                return previous
+            }
+            // Nothing chosen yet: prefer the Terminal art when it is there.
+            // install.sh puts it in place from firmware/assets, so the Mac
+            // shows the same character as the board out of the box — one
+            // character for the whole project, and the one the README shows.
+            // The vector stays as the fallback, not as the default.
+            if isComplete("terminal") { return "terminal" }
+            return ""
+        }
         set {
             UserDefaults.standard.set(newValue, forKey: "mascot")
             cache.removeAll()

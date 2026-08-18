@@ -1,15 +1,19 @@
 """
-Grava as credenciais de WiFi direto na partição NVS da placa.
+Writes WiFi, token and the bridge address straight into the board's NVS
+partition.
 
-Por que assim, e não um portal na tela: nenhuma senha entra no código-fonte,
-no git, nem em conversa. Ela é digitada aqui no seu terminal (oculta), vira
-um binário NVS por uma ferramenta oficial do ESP-IDF, é gravada, e o arquivo
-temporário é apagado — inclusive se o script falhar no meio.
+Why this way and not an on-screen portal: no password ends up in the source, in
+git, or in a conversation. It is typed here in your terminal (hidden), turned
+into an NVS binary by an official Espressif tool, flashed, and the temporary
+file is deleted — including when the script blows up halfway.
 
-    python3 bridge/provision_wifi.py
+    /usr/bin/python3 bridge/provision_wifi.py
 
-Requer a placa conectada e o ESP-IDF exportado (source ~/esp/esp-idf/export.sh).
+It does not require ESP-IDF: the tools come from PyPI into a venv of ours,
+built the first time. See bridge/tools.py.
 """
+
+from __future__ import annotations
 
 import os
 import shutil
@@ -19,140 +23,87 @@ import tempfile
 from getpass import getpass
 from pathlib import Path
 
-# Da partitions.csv do firmware: nvs em 0x9000, tamanho 0x6000 (24KB).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import tools  # noqa: E402
+
+# From the firmware's partitions.csv: nvs at 0x9000, size 0x6000 (24KB).
 NVS_OFFSET = "0x9000"
-NVS_TAMANHO = "0x6000"
-NAMESPACE = "fagulha"
+NVS_SIZE = "0x6000"
+NAMESPACE = "wisp"
+
+# The bridge publishes this name over mDNS, and it is born and dies with the
+# bridge — unlike the Mac's hostname, which macOS renumbers on its own when it
+# detects a conflict on the network, leaving the board orphaned. It is the
+# default on purpose.
+DEFAULT_HOST = "wisp.local"
 
 
-def achar_ferramenta() -> Path:
-    idf = os.environ.get("IDF_PATH") or str(Path.home() / "esp" / "esp-idf")
-    p = Path(idf) / "components" / "nvs_flash" / "nvs_partition_generator" / "nvs_partition_gen.py"
-    if not p.exists():
-        sys.exit(f"não achei o nvs_partition_gen.py em {p}\n"
-                 f"rode primeiro: source ~/esp/esp-idf/export.sh")
-    return p
+def ask(port: str) -> dict:
+    print(f"board   : {port}\n")
+
+    ssid = input("WiFi SSID: ").strip()
+    if not ssid:
+        sys.exit("empty SSID.")
+    password = getpass("password (not shown): ")
+
+    host = input(f"bridge host [{DEFAULT_HOST}]: ").strip() or DEFAULT_HOST
+
+    if len(ssid) > 32 or len(password) > 64:
+        sys.exit("SSID (max 32) or password (max 64) too long for WiFi.")
+
+    # Token: the same secret the bridge demands from anything arriving over the
+    # network. It comes from the user's config, generated on its own on first
+    # use — nobody types anything. Writing it here is what allows closing the
+    # network: with the board knowing the token, `require_token` can go true
+    # and the bridge stops answering strangers.
+    import config as _cfg
+    token = _cfg.read()["token"]
+
+    return {"ssid": ssid, "pass": password, "host": host, "token": token}
 
 
-def python_do_idf() -> str:
-    """
-    O gerador de NVS depende do módulo esp_idf_nvs_partition_gen, que só existe
-    no virtualenv do ESP-IDF — não no Python do sistema (nem no do asdf).
-    Rodar com o interpretador errado dá "No module named esp_idf_nvs_partition_gen".
-    """
-    candidatos = []
-    if env := os.environ.get("IDF_PYTHON_ENV_PATH"):
-        candidatos.append(Path(env) / "bin" / "python")
-    # Mais novo primeiro (idf5.5 antes de idf5.4).
-    candidatos += sorted((Path.home() / ".espressif" / "python_env").glob("*/bin/python"),
-                         reverse=True)
-    candidatos.append(Path(sys.executable))
+def write(port: str, data: dict) -> int:
+    # The board only does 2.4GHz. We cannot detect the band from here, so we
+    # warn instead.
+    print("\nreminder: the ESP32-S3 only connects to 2.4GHz. If your network is "
+          "5GHz-only, the connection fails even with the right password.")
 
-    for c in candidatos:
-        if not c.exists():
-            continue
-        try:
-            subprocess.run([str(c), "-c", "import esp_idf_nvs_partition_gen"],
-                           check=True, capture_output=True)
-            return str(c)
-        except subprocess.CalledProcessError:
-            continue
+    tools.ensure()
 
-    sys.exit("nenhum Python com o módulo esp_idf_nvs_partition_gen.\n"
-             "rode: source ~/esp/esp-idf/export.sh   e tente de novo.")
-
-
-def achar_porta() -> str:
-    candidatos = sorted(Path("/dev").glob("cu.usbmodem*"))
-    if not candidatos:
-        sys.exit("nenhuma porta cu.usbmodem* encontrada — a placa está conectada?")
-    if len(candidatos) > 1:
-        print("várias portas encontradas:")
-        for i, c in enumerate(candidatos):
-            print(f"  [{i}] {c}")
-        return str(candidatos[int(input("qual? ") or 0)])
-    return str(candidatos[0])
-
-
-def hostname_do_mac() -> str:
+    tmp = Path(tempfile.mkdtemp(prefix="wisp-nvs-"))
+    os.chmod(tmp, 0o700)
+    csv, binary = tmp / "nvs.csv", tmp / "nvs.bin"
     try:
-        nome = subprocess.check_output(["scutil", "--get", "LocalHostName"], text=True).strip()
-        return f"{nome}.local"
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return ""
+        # The generator requires the namespace line before the keys.
+        lines = ["key,type,encoding,value", f"{NAMESPACE},namespace,,"]
+        lines += [f"{k},data,string,{v}" for k, v in data.items()]
+        csv.write_text("\n".join(lines) + "\n")
+        os.chmod(csv, 0o600)
+
+        print("\ngenerating the NVS partition…")
+        tools.nvs_gen("generate", str(csv), str(binary), NVS_SIZE,
+                      check=True, capture_output=True, text=True)
+
+        print(f"writing at {NVS_OFFSET}…")
+        tools.esptool("--chip", "esp32s3", "--port", port, "--after", "hard_reset",
+                      "write_flash", NVS_OFFSET, str(binary), check=True)
+    except subprocess.CalledProcessError as exc:
+        out = (exc.stderr or exc.stdout or "").strip()
+        print(f"\nfailed: {out or exc}", file=sys.stderr)
+        return 1
+    finally:
+        # The password was on disk; make it go away even if something above
+        # exploded.
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    print("\ndone. The board restarts on its own and looks for the bridge at "
+          f"http://{data['host']}:4666/state")
+    return 0
 
 
 def main() -> int:
-    ferramenta = achar_ferramenta()
-    porta = achar_porta()
-
-    print(f"placa   : {porta}")
-    padrao_host = hostname_do_mac()
-
-    ssid = input("SSID do WiFi: ").strip()
-    if not ssid:
-        sys.exit("SSID vazio.")
-    senha = getpass("senha (não aparece na tela): ")
-
-    host = input(f"host do bridge [{padrao_host}]: ").strip() or padrao_host
-    if not host:
-        sys.exit("host vazio — preciso saber onde a placa procura o bridge.")
-
-    if len(ssid) > 32 or len(senha) > 64:
-        sys.exit("SSID (máx 32) ou senha (máx 64) longos demais para o WiFi.")
-
-    # Token: o mesmo segredo que o bridge exige de quem vem pela rede. Sai do
-    # config do usuário, gerado sozinho no primeiro uso — ninguém digita nada.
-    # Gravar aqui é o que permite fechar a rede: com a placa sabendo o token,
-    # `exigir_token` pode virar true e o bridge para de responder a estranhos.
-    sys.path.insert(0, str(Path(__file__).parent))
-    import config as _cfg
-    token = _cfg.ler()["token"]
-
-    # A placa só faz 2.4GHz. Não dá pra detectar a banda daqui, então avisamos.
-    print("\nlembrete: o ESP32-S3 só conecta em 2.4GHz. Se sua rede for "
-          "5GHz-only, a conexão vai falhar mesmo com a senha certa.")
-
-    tmp = Path(tempfile.mkdtemp(prefix="fagulha-nvs-"))
-    os.chmod(tmp, 0o700)
-    csv, binario = tmp / "nvs.csv", tmp / "nvs.bin"
-    try:
-        # O gerador exige a linha de namespace antes das chaves.
-        csv.write_text(
-            "key,type,encoding,value\n"
-            f"{NAMESPACE},namespace,,\n"
-            f"ssid,data,string,{ssid}\n"
-            f"pass,data,string,{senha}\n"
-            f"host,data,string,{host}\n"
-            f"token,data,string,{token}\n"
-        )
-        os.chmod(csv, 0o600)
-
-        print("\ngerando partição NVS…")
-        subprocess.run(
-            [python_do_idf(), str(ferramenta), "generate",
-             str(csv), str(binario), NVS_TAMANHO],
-            check=True, capture_output=True, text=True,
-        )
-
-        print(f"gravando em {NVS_OFFSET}…")
-        venv_esptool = Path(__file__).resolve().parent.parent / ".venv" / "bin" / "esptool"
-        esptool = str(venv_esptool) if venv_esptool.exists() else "esptool.py"
-        subprocess.run(
-            [esptool, "--port", porta, "write-flash", NVS_OFFSET, str(binario)],
-            check=True,
-        )
-    except subprocess.CalledProcessError as exc:
-        saida = (exc.stderr or exc.stdout or "").strip()
-        print(f"\nfalhou: {saida or exc}", file=sys.stderr)
-        return 1
-    finally:
-        # A senha esteve em disco; some com ela mesmo se algo explodiu acima.
-        shutil.rmtree(tmp, ignore_errors=True)
-
-    print("\npronto. Reinicie a placa (ou desconecte e reconecte o USB).")
-    print(f"A Fagulha vai procurar o bridge em http://{host}:4666/state")
-    return 0
+    port = tools.port()
+    return write(port, ask(port))
 
 
 if __name__ == "__main__":

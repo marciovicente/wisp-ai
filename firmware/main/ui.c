@@ -1,5 +1,5 @@
 /*
- * Fagulha — desenho e animação.
+ * Wisp — desenho e animação.
  *
  * Três modos na mesma tela (tile 0):
  *   1. mascotes  — um por sessão do Claude, 1 a 4, dividindo o espaço
@@ -37,22 +37,22 @@ static const char *TAG = "ui";
  *  alfabetica.
  * ———————————————————————————————————————————————— */
 #define ASSETS_QTD      8
-#define ASSETS_CHECKSUM 30780
+#define ASSETS_CHECKSUM 23455
 
 /* Ordem alfabetica dos arquivos na particao, mapeada para os nossos estados. */
-static const int IDX[FG_QTD] = {
-    [FG_OCIOSO]      = 3,   /* idle    */
-    [FG_TRABALHANDO] = 7,   /* working */
-    [FG_FERRAMENTA]  = 5,   /* tool    */
-    [FG_PERGUNTANDO] = 0,   /* asking  */
-    [FG_ESPERANDO]   = 6,   /* waiting */
-    [FG_CONCLUIDO]   = 1,   /* done    */
-    [FG_ERRO]        = 2,   /* error   */
-    [FG_SEM_REDE]    = 4,   /* offline */
+static const int IDX[WISP_COUNT] = {
+    [WISP_IDLE]      = 3,   /* idle    */
+    [WISP_WORKING] = 7,   /* working */
+    [WISP_TOOL]  = 5,   /* tool    */
+    [WISP_ASKING] = 0,   /* asking  */
+    [WISP_WAITING]   = 6,   /* waiting */
+    [WISP_DONE]   = 1,   /* done    */
+    [WISP_ERROR]        = 2,   /* error   */
+    [WISP_OFFLINE]    = 4,   /* offline */
 };
 
 static mmap_assets_handle_t s_assets;
-static lv_image_dsc_t s_dsc[FG_QTD];
+static lv_image_dsc_t s_dsc[WISP_COUNT];
 static bool s_tem_fotos = false;
 
 static void carregar_fotos(void)
@@ -72,32 +72,49 @@ static void carregar_fotos(void)
         ESP_LOGW(TAG, "particao de mascotes nao abriu — segue no vetor");
         return;
     }
-    for (int e = 0; e < FG_QTD; e++) {
+    for (int e = 0; e < WISP_COUNT; e++) {
         int i = IDX[e];
         const uint8_t *dados = mmap_assets_get_mem(s_assets, i);
-        int tam = mmap_assets_get_size(s_assets, i);
-        if (!dados || tam <= 0) return;
-        s_dsc[e].header.magic = LV_IMAGE_HEADER_MAGIC;
+        /* get_size conta os 2 bytes de magic do empacotador, que o get_mem ja
+         * pulou — sem descontar, sobra lixo no fim de cada imagem. */
+        int tam = mmap_assets_get_size(s_assets, i) - 2;
+        if (!dados || tam <= (int) sizeof(lv_image_header_t)) return;
+
         /* RGB565A8 CRU, convertido no build. Sem decodificacao: o LVGL le
          * direto da flash mapeada.
          *
          * A primeira versao usava RAW_ALPHA, que decodifica PNG em tempo de
          * execucao. Medido: FPS caiu de 62 para 1-7 e a RAM interna chegou a
          * 12 bytes de minimo historico. Nesta placa nao ha folga para
-         * decodificar imagem — a conversao tem que acontecer antes. */
-        s_dsc[e].header.cf = LV_COLOR_FORMAT_RGB565A8;
-        s_dsc[e].header.w = 236;
-        s_dsc[e].header.h = 236;
-        s_dsc[e].header.stride = 236 * 2;
-        s_dsc[e].data = dados;
-        s_dsc[e].data_size = tam;
+         * decodificar imagem — a conversao tem que acontecer antes.
+         *
+         * O .bin comeca com o cabecalho do LVGL: 12 bytes com magic, formato,
+         * largura, altura e stride. ELE NAO E PIXEL. Apontar `data` para o
+         * inicio do arquivo desloca o plano de cor em 6 pixels (12 bytes a 2
+         * por pixel) e o alfa em 12, porque o LVGL acha o alfa somando
+         * stride*h ao mesmo ponteiro. Na tela isso aparece como o boneco
+         * cortado de um lado e reaparecendo do outro, com as bordas picotadas
+         * — a cor e o alfa fora de fase entre si.
+         *
+         * Ler o cabecalho do proprio arquivo, em vez de reescrever 236 aqui,
+         * tira a medida do codigo de quebra: trocar a arte por outra
+         * resolucao deixa de exigir uma edicao que ninguem lembra de fazer. */
+        memcpy(&s_dsc[e].header, dados, sizeof(lv_image_header_t));
+        s_dsc[e].data      = dados + sizeof(lv_image_header_t);
+        s_dsc[e].data_size = tam - sizeof(lv_image_header_t);
+
+        if (s_dsc[e].header.magic != LV_IMAGE_HEADER_MAGIC ||
+            s_dsc[e].header.cf != LV_COLOR_FORMAT_RGB565A8) {
+            ESP_LOGW(TAG, "asset %d nao e RGB565A8 do LVGL — segue no vetor", i);
+            return;
+        }
     }
     s_tem_fotos = true;
-    ESP_LOGI(TAG, "mascotes de imagem carregados (%d estados)", FG_QTD);
+    ESP_LOGI(TAG, "mascotes de imagem carregados (%d estados)", WISP_COUNT);
 }
 
 /* 16ms para acompanhar o refresh do LVGL (LV_DEF_REFR_PERIOD=15). Com 33ms a
- * fagulha só se movia em metade dos quadros e parecia travada. */
+ * luz só se movia em metade dos quadros e parecia travada. */
 #define PERIODO_MS 16
 #define QTD_INTERROG 3
 #define PISCADA_MS 170
@@ -112,23 +129,23 @@ typedef struct { uint8_t r, g, b, dr, dg, db; } cor_t;
 #define C_CARCACA_T lv_color_make(238, 230, 210)
 #define C_CARCACA_B lv_color_make(206, 194, 172)
 
-static const cor_t COR[FG_QTD] = {
-    [FG_OCIOSO]      = {232, 132,  90, 176,  78,  52},
-    [FG_TRABALHANDO] = {232, 132,  90, 176,  78,  52},
-    [FG_FERRAMENTA]  = {232, 152,  82, 172,  96,  44},
-    [FG_PERGUNTANDO] = {186, 142, 234, 122,  84, 172},
-    [FG_ESPERANDO]   = {232, 193,  90, 168, 132,  48},
-    [FG_CONCLUIDO]   = { 95, 207, 142,  52, 132,  90},
-    [FG_ERRO]        = { 96, 150, 205,  58,  96, 140},
-    [FG_SEM_REDE]    = { 90,  99, 112,  52,  58,  68},
+static const cor_t COR[WISP_COUNT] = {
+    [WISP_IDLE]      = {232, 132,  90, 176,  78,  52},
+    [WISP_WORKING] = {232, 132,  90, 176,  78,  52},
+    [WISP_TOOL]  = {232, 152,  82, 172,  96,  44},
+    [WISP_ASKING] = {186, 142, 234, 122,  84, 172},
+    [WISP_WAITING]   = {232, 193,  90, 168, 132,  48},
+    [WISP_DONE]   = { 95, 207, 142,  52, 132,  90},
+    [WISP_ERROR]        = { 96, 150, 205,  58,  96, 140},
+    [WISP_OFFLINE]    = { 90,  99, 112,  52,  58,  68},
 };
 
 /* Texto EXIBIDO em inglês: as Montserrat do LVGL não têm acento. */
-static const char *NOME[FG_QTD] = {
-    [FG_OCIOSO] = "idle",        [FG_TRABALHANDO] = "thinking",
-    [FG_FERRAMENTA] = "working", [FG_PERGUNTANDO] = "asking you",
-    [FG_ESPERANDO] = "needs you",[FG_CONCLUIDO] = "done",
-    [FG_ERRO] = "failed",        [FG_SEM_REDE] = "offline",
+static const char *NOME[WISP_COUNT] = {
+    [WISP_IDLE] = "idle",        [WISP_WORKING] = "thinking",
+    [WISP_TOOL] = "working", [WISP_ASKING] = "asking you",
+    [WISP_WAITING] = "needs you",[WISP_DONE] = "done",
+    [WISP_ERROR] = "failed",        [WISP_OFFLINE] = "offline",
 };
 
 /* Alvos por estado. As medidas do olho são para o mascote em tamanho cheio;
@@ -140,7 +157,7 @@ typedef enum { BOCA_SORRISO, BOCA_SORRISAO, BOCA_PEQUENA, BOCA_O,
 typedef struct {
     int16_t olho_alt, olho_dx, olho_dy;
     uint8_t respira;
-    uint8_t orbita;      /* 0 = fagulha parada, 255 = órbita rápida */
+    uint8_t orbita;      /* 0 = luz parada, 255 = órbita rápida */
     bool    interrog;
     /* —— expressao ——
      * sobrancelha: angulo em graus. Positivo levanta a ponta EXTERNA, que le
@@ -155,23 +172,23 @@ typedef struct {
     bool    olhos_felizes;      /* arcos para cima, o sorriso que mora no olho */
 } alvo_t;
 
-static const alvo_t ALVO[FG_QTD] = {
+static const alvo_t ALVO[WISP_COUNT] = {
     /*                 alt  dx   dy  resp orb interr | sob_ang dy inv | boca         olhar_x y | felizes */
-    [FG_OCIOSO]      = {40,  0,  -6,  6,  20, false,        0,  0, false, BOCA_SORRISO,   0,   0, false},
-    [FG_TRABALHANDO] = {36,  0,  -2,  4, 170, false,       -6,  4, false, BOCA_PEQUENA,  45, -50, false},
-    [FG_FERRAMENTA]  = {24, -4,   4,  3, 255, false,      -16, -5, false, BOCA_PEQUENA,   0,  15, false},
-    [FG_PERGUNTANDO] = {46,  0,  -9,  7,   0, true,        14, 10, false, BOCA_O,         0, -10, false},
-    [FG_ESPERANDO]   = {44,  0,  -8, 10,  60, false,       20,  8, false, BOCA_ONDA,      0,  10, false},
-    [FG_CONCLUIDO]   = {12,  0,  -2,  9,  40, false,        8,  6, false, BOCA_SORRISAO,  0,   0, true },
-    [FG_ERRO]        = {32,  0,   6,  3,  25, false,      -22,  2, true,  BOCA_ONDA,      0,  25, false},
-    [FG_SEM_REDE]    = { 8,  0,   0,  2,   0, false,        0, -3, false, BOCA_RETA,      0,   0, false},
+    [WISP_IDLE]      = {40,  0,  -6,  6,  20, false,        0,  0, false, BOCA_SORRISO,   0,   0, false},
+    [WISP_WORKING] = {36,  0,  -2,  4, 170, false,       -6,  4, false, BOCA_PEQUENA,  45, -50, false},
+    [WISP_TOOL]  = {24, -4,   4,  3, 255, false,      -16, -5, false, BOCA_PEQUENA,   0,  15, false},
+    [WISP_ASKING] = {46,  0,  -9,  7,   0, true,        14, 10, false, BOCA_O,         0, -10, false},
+    [WISP_WAITING]   = {44,  0,  -8, 10,  60, false,       20,  8, false, BOCA_ONDA,      0,  10, false},
+    [WISP_DONE]   = {12,  0,  -2,  9,  40, false,        8,  6, false, BOCA_SORRISAO,  0,   0, true },
+    [WISP_ERROR]        = {32,  0,   6,  3,  25, false,      -22,  2, true,  BOCA_ONDA,      0,  25, false},
+    [WISP_OFFLINE]    = { 8,  0,   0,  2,   0, false,        0, -3, false, BOCA_RETA,      0,   0, false},
 };
 
 /* ————————————————————————————————————————————————
  *  Um mascote = uma sessão do Claude
  * ———————————————————————————————————————————————— */
 typedef struct {
-    lv_obj_t *corpo, *olho[2], *fagulha, *detalhe, *projeto;
+    lv_obj_t *corpo, *olho[2], *wisp, *detail, *project;
     /* Rosto: o que estava faltando para os oito estados nao serem o mesmo
      * boneco em oito cores. Olho vira BRANCO com pupila e brilho; sobrancelha
      * e boca entram porque e nelas que a expressao mora. */
@@ -183,16 +200,16 @@ typedef struct {
     /* Pontos da sobrancelha. lv_line guarda o PONTEIRO, nao copia — se este
      * array sair de escopo, o LVGL desenha lixo. Por isso vive aqui. */
     lv_point_precise_t sob_pts[2][2];
-    fg_estado_t alvo, anterior;
+    wisp_state_t alvo, anterior;
     int16_t olho_alt, olho_dx, olho_dy;
     int16_t p_alt, p_dx, p_dy;          /* guardas: só redesenha se mudou */
-    float   ang, vel;                    /* órbita acumulada da fagulha */
+    float   ang, vel;                    /* órbita acumulada da luz */
     uint32_t prox_piscada, inicio_piscada;
     int16_t  d;                          /* diâmetro atual do corpo */
     char    ult_detalhe[40], ult_projeto[28];
 } mascote_t;
 
-static mascote_t g_m[FG_MAX_SESSOES];
+static mascote_t g_m[WISP_MAX_SESSIONS];
 static int g_qtd = 1;
 
 /* Interrogações e rodapé global só existem no modo de sessão única: com a
@@ -201,12 +218,25 @@ static lv_obj_t *g_interrog[QTD_INTERROG];
 
 /* —— modo repouso —— */
 static lv_obj_t *g_hora, *g_dia, *g_temp, *g_cond, *g_maxmin, *g_icone;
+
+/* —— bateria ——
+ * Fica FORA da lista de objetos do repouso de proposito: e o unico elemento
+ * que vale nos dois modos. Mascote na tela ou relogio na tela, a pergunta
+ * "da para ficar sem cabo?" continua valendo. */
+static lv_obj_t *g_bateria;
 static bool g_em_repouso = false;
 static char g_icone_atual[12] = "";
 
 /* —— painel de limites (tile 1) —— */
 #define MAX_BARRAS 4
 static lv_obj_t *g_tile_painel;
+/* O tileview e os tiles em ordem, para os botoes navegarem. Guardar a LISTA,
+ * e nao so um indice nosso, porque o dedo tambem troca de tela: um contador
+ * proprio dessincronizaria na primeira deslizada. A verdade e sempre o tile
+ * ativo no momento da consulta. */
+static lv_obj_t *g_tv;
+static lv_obj_t *g_telas[2];
+#define QTD_TELAS ((int) (sizeof(g_telas) / sizeof(g_telas[0])))
 static lv_obj_t *g_bar_rotulo[MAX_BARRAS], *g_bar_pct[MAX_BARRAS];
 static lv_obj_t *g_bar[MAX_BARRAS], *g_bar_reset[MAX_BARRAS];
 static lv_obj_t *g_frescor;
@@ -223,7 +253,7 @@ static uint32_t g_refrescos, g_ultima_medida;
 
 /* lv_obj_create devolve o objeto CLICAVEL por padrao, e objeto clicavel
  * captura o arrasto antes que ele chegue ao tileview — que e quem rola para
- * o painel de limites. Como a tela e coberta por corpos, olhos e fagulhas,
+ * o painel de limites. Como a tela e coberta por corpos, olhos e luzes,
  * bastava um deles clicavel para o deslize morrer. Tudo que e decoracao
  * passa por aqui. */
 static void so_decoracao(lv_obj_t *o)
@@ -348,13 +378,13 @@ static void vaga_de(int total, int i, vaga_t *v)
 
 static void aplicar_layout(int total)
 {
-    for (int i = 0; i < FG_MAX_SESSOES; i++) {
+    for (int i = 0; i < WISP_MAX_SESSIONS; i++) {
         mascote_t *m = &g_m[i];
         bool ativo = i < total;
         /* chama entra na lista: ela e IRMA do corpo, nao filha. Olhos e
          * boca somem junto com o corpo por serem filhos; a chama nao,
          * e ficaria pairando sozinha sobre o relogio. */
-        lv_obj_t *objs[] = {m->corpo, m->fagulha, m->detalhe, m->projeto,
+        lv_obj_t *objs[] = {m->corpo, m->wisp, m->detail, m->project,
                             m->chama, m->foto, m->braco[0], m->braco[1]};
         for (size_t k = 0; k < 8; k++) {
             if (!objs[k]) continue;
@@ -369,8 +399,8 @@ static void aplicar_layout(int total)
          * imagem. */
         if (m->foto) {
             /* Some TUDO que era desenhado, inclusive a chama — ela pertencia
-             * a fagulha organica e sobre um computador nao quer dizer nada. */
-            lv_obj_t *desenho[] = {m->corpo, m->fagulha, m->chama,
+             * a luz organica e sobre um computador nao quer dizer nada. */
+            lv_obj_t *desenho[] = {m->corpo, m->wisp, m->chama,
                                    m->braco[0], m->braco[1]};
             for (size_t k = 0; k < 5; k++)
                 lv_obj_add_flag(desenho[k], LV_OBJ_FLAG_HIDDEN);
@@ -426,10 +456,10 @@ static void aplicar_layout(int total)
                          v.y + v.d * 22 / 100);
         }
 
-        lv_obj_set_style_text_font(m->detalhe, v.f_det, 0);
-        lv_obj_set_style_text_font(m->projeto, v.f_proj, 0);
-        lv_obj_align(m->detalhe, LV_ALIGN_CENTER, v.x, v.y + v.d / 2 + 26);
-        lv_obj_align(m->projeto, LV_ALIGN_CENTER, v.x, v.y + v.d / 2 + 54);
+        lv_obj_set_style_text_font(m->detail, v.f_det, 0);
+        lv_obj_set_style_text_font(m->project, v.f_proj, 0);
+        lv_obj_align(m->detail, LV_ALIGN_CENTER, v.x, v.y + v.d / 2 + 26);
+        lv_obj_align(m->project, LV_ALIGN_CENTER, v.x, v.y + v.d / 2 + 54);
 
         m->p_alt = -1;   /* força reposicionar os olhos na nova escala */
     }
@@ -438,16 +468,16 @@ static void aplicar_layout(int total)
         lv_obj_add_flag(g_interrog[k], LV_OBJ_FLAG_HIDDEN);
 }
 
-fg_estado_t ui_estado_de_texto(const char *s)
+wisp_state_t ui_state_from_text(const char *s)
 {
-    if (!s) return FG_OCIOSO;
-    if (!strcmp(s, "working")) return FG_TRABALHANDO;
-    if (!strcmp(s, "tool"))    return FG_FERRAMENTA;
-    if (!strcmp(s, "asking"))  return FG_PERGUNTANDO;
-    if (!strcmp(s, "waiting")) return FG_ESPERANDO;
-    if (!strcmp(s, "done"))    return FG_CONCLUIDO;
-    if (!strcmp(s, "error"))   return FG_ERRO;
-    return FG_OCIOSO;
+    if (!s) return WISP_IDLE;
+    if (!strcmp(s, "working")) return WISP_WORKING;
+    if (!strcmp(s, "tool"))    return WISP_TOOL;
+    if (!strcmp(s, "asking"))  return WISP_ASKING;
+    if (!strcmp(s, "waiting")) return WISP_WAITING;
+    if (!strcmp(s, "done"))    return WISP_DONE;
+    if (!strcmp(s, "error"))   return WISP_ERROR;
+    return WISP_IDLE;
 }
 
 static inline int16_t aproximar(int16_t atual, int16_t alvo, int passo)
@@ -622,14 +652,14 @@ static void animar_um(mascote_t *m, uint32_t agora, bool sozinho)
         lv_obj_align(m->boca, LV_ALIGN_CENTER, 0, by);
     }
 
-    /* Fagulha do topo: paira acima da cabeca e tremula. Morre no offline —
+    /* Luz do topo: paira acima da cabeca e tremula. Morre no offline —
      * sem o outro lado, nao ha o que arder. */
-    if (m->alvo == FG_SEM_REDE) {
+    if (m->alvo == WISP_OFFLINE) {
         lv_obj_add_flag(m->chama, LV_OBJ_FLAG_HIDDEN);
     } else {
         /* Parada de proposito. Tremular era mover um objeto sobre o fundo a
          * cada quadro — mais uma fonte de rastro, pelo mesmo motivo das
-         * sobrancelhas. Quem se mexe aqui e a fagulha em orbita, que ja da
+         * sobrancelhas. Quem se mexe aqui e a luz em orbita, que ja da
          * o sinal de movimento. */
         int16_t cd = 16 * esc / 236;
         if (cd < 4) cd = 4;
@@ -640,7 +670,7 @@ static void animar_um(mascote_t *m, uint32_t agora, bool sozinho)
         lv_obj_align(m->chama, LV_ALIGN_CENTER, vc.x, vc.y - esc / 2 - cd);
     }
 
-    /* Fagulha: ângulo ACUMULADO e velocidade interpolada. Derivar de
+    /* Luz: ângulo ACUMULADO e velocidade interpolada. Derivar de
      * (tempo % periodo) fazia a bolinha teleportar ao mudar de estado. */
     float vel_alvo = A->orbita / 255.0f * 5.0f;
     m->vel += (vel_alvo - m->vel) * 0.05f;
@@ -648,15 +678,15 @@ static void animar_um(mascote_t *m, uint32_t agora, bool sozinho)
     if (m->ang > 2.0f * (float) M_PI) m->ang -= 2.0f * (float) M_PI;
 
     if (A->orbita) {
-        lv_obj_remove_flag(m->fagulha, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_remove_flag(m->wisp, LV_OBJ_FLAG_HIDDEN);
         int rx = (esc * 152) / 236, ry = (esc * 94) / 236;
         vaga_t v; vaga_de(g_qtd, (int)(m - g_m), &v);
-        lv_obj_align(m->fagulha, LV_ALIGN_CENTER,
+        lv_obj_align(m->wisp, LV_ALIGN_CENTER,
                      v.x + (int16_t)(cosf(m->ang) * rx),
                      v.y + (int16_t)(sinf(m->ang) * ry));
-        lv_obj_set_style_bg_color(m->fagulha, lv_color_make(C->r, C->g, C->b), 0);
+        lv_obj_set_style_bg_color(m->wisp, lv_color_make(C->r, C->g, C->b), 0);
     } else {
-        lv_obj_add_flag(m->fagulha, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(m->wisp, LV_OBJ_FLAG_HIDDEN);
     }
 
     /* Interrogações subindo: só no modo de sessão única. */
@@ -685,7 +715,7 @@ static void animar(lv_timer_t *t)
     if (g_em_repouso) return;   /* mascotes escondidos: animar é desperdício */
 
     const uint32_t agora = lv_tick_get();
-    for (int i = 0; i < g_qtd && i < FG_MAX_SESSOES; i++)
+    for (int i = 0; i < g_qtd && i < WISP_MAX_SESSIONS; i++)
         animar_um(&g_m[i], agora, g_qtd == 1);
 
     if (agora - g_ultima_medida >= 5000) {
@@ -887,7 +917,7 @@ static void criar_mascote(lv_obj_t *pai, mascote_t *m)
         so_decoracao(m->foto);
     }
 
-    /* A fagulha que paira acima da cabeca — o que amarra o boneco ao nome. */
+    /* A luz que paira acima da cabeca: um will-o-the-wisp, que e de onde vem o nome. */
     m->chama = lv_obj_create(pai);
     lv_obj_set_style_radius(m->chama, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_border_width(m->chama, 0, 0);
@@ -897,30 +927,30 @@ static void criar_mascote(lv_obj_t *pai, mascote_t *m)
     lv_obj_set_style_pad_all(m->chama, 0, 0);
     so_decoracao(m->chama);
 
-    m->fagulha = lv_obj_create(pai);
-    lv_obj_set_size(m->fagulha, 14, 14);
-    lv_obj_set_style_radius(m->fagulha, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_border_width(m->fagulha, 0, 0);
-    lv_obj_add_flag(m->fagulha, LV_OBJ_FLAG_HIDDEN);
-    so_decoracao(m->fagulha);
+    m->wisp = lv_obj_create(pai);
+    lv_obj_set_size(m->wisp, 14, 14);
+    lv_obj_set_style_radius(m->wisp, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(m->wisp, 0, 0);
+    lv_obj_add_flag(m->wisp, LV_OBJ_FLAG_HIDDEN);
+    so_decoracao(m->wisp);
 
-    m->detalhe = lv_label_create(pai);
-    lv_obj_set_style_text_color(m->detalhe, lv_color_make(230, 233, 238), 0);
-    lv_label_set_text(m->detalhe, "");
+    m->detail = lv_label_create(pai);
+    lv_obj_set_style_text_color(m->detail, lv_color_make(230, 233, 238), 0);
+    lv_label_set_text(m->detail, "");
 
-    m->projeto = lv_label_create(pai);
-    lv_obj_set_style_text_color(m->projeto, lv_color_make(134, 144, 158), 0);
-    lv_label_set_text(m->projeto, "");
+    m->project = lv_label_create(pai);
+    lv_obj_set_style_text_color(m->project, lv_color_make(134, 144, 158), 0);
+    lv_label_set_text(m->project, "");
 
-    m->alvo = FG_SEM_REDE;
-    m->anterior = FG_QTD;
+    m->alvo = WISP_OFFLINE;
+    m->anterior = WISP_COUNT;
     m->olho_alt = 6;
     m->p_alt = -1;
     m->ang = -(float) M_PI / 2;
     m->d = 236;
 }
 
-void ui_criar(void)
+void ui_create(void)
 {
     lv_obj_t *raiz = lv_screen_active();
     lv_obj_set_style_bg_color(raiz, lv_color_black(), 0);
@@ -936,6 +966,9 @@ void ui_criar(void)
 
     lv_obj_t *tela = lv_tileview_add_tile(tv, 0, 0, LV_DIR_RIGHT);
     g_tile_painel  = lv_tileview_add_tile(tv, 1, 0, LV_DIR_LEFT);
+    g_tv = tv;
+    g_telas[0] = tela;
+    g_telas[1] = g_tile_painel;
     lv_obj_t *tiles[2] = {tela, g_tile_painel};
     for (int i = 0; i < 2; i++) {
         lv_obj_set_style_bg_color(tiles[i], lv_color_black(), 0);
@@ -945,7 +978,7 @@ void ui_criar(void)
     criar_painel(g_tile_painel);
 
     carregar_fotos();
-    for (int i = 0; i < FG_MAX_SESSOES; i++) criar_mascote(tela, &g_m[i]);
+    for (int i = 0; i < WISP_MAX_SESSIONS; i++) criar_mascote(tela, &g_m[i]);
 
     for (int i = 0; i < QTD_INTERROG; i++) {
         g_interrog[i] = lv_label_create(tela);
@@ -953,6 +986,21 @@ void ui_criar(void)
         lv_obj_set_style_text_font(g_interrog[i], &lv_font_montserrat_38, 0);
         lv_obj_add_flag(g_interrog[i], LV_OBJ_FLAG_HIDDEN);
     }
+
+    /* —— bateria ——
+     * Canto superior DIREITO. Os dois cantos de cima ficam livres nos tres
+     * layouts — a grade de quatro mascotes para a 52px da borda e o relogio
+     * comeca em y=84 — entao a escolha e de gosto, nao de espaco.
+     *
+     * Margem de 40px, nao 16: com 16 o raio de carregando encostava na borda
+     * e sumia. O painel tem 480px de vidro mas nem todo ele se ve — a moldura
+     * come a beirada, e mais ainda nos cantos, que sao arredondados. 40 e a
+     * mesma folga com que a grade de mascotes para da borda (52px), e da o
+     * mesmo respiro nos dois eixos para o canto redondo nao morder nada. */
+    g_bateria = lv_label_create(tela);
+    lv_obj_set_style_text_font(g_bateria, &lv_font_montserrat_20, 0);
+    lv_label_set_text(g_bateria, "");
+    lv_obj_align(g_bateria, LV_ALIGN_TOP_RIGHT, -40, 26);
 
     /* —— repouso —— */
     g_hora = lv_label_create(tela);
@@ -1014,19 +1062,30 @@ void ui_criar(void)
 /* ————————————————————————————————————————————————
  *  Atualização
  * ———————————————————————————————————————————————— */
-void ui_atualizar(const fg_dados_t *d)
+void ui_update(const wisp_data_t *d)
 {
     if (!d) return;
-    int n = d->qtd_sessoes;
-    if (n > FG_MAX_SESSOES) n = FG_MAX_SESSOES;
+    int n = d->session_count;
+    if (n > WISP_MAX_SESSIONS) n = WISP_MAX_SESSIONS;
 
-    /* Nenhuma sessão ATIVA = relógio, imediatamente.
+    /* Relogio so depois de repouso_s de silencio — nao assim que a lista de
+     * sessoes esvazia.
      *
-     * O bridge já filtra: sessão que parou de iterar sai da lista. Amarrar o
-     * repouso a isso (em vez de a um limiar próprio) evita o intervalo de
-     * tela vazia que existiria entre o mascote sumir e o relógio entrar. */
+     * Este campo existia e NAO era usado: o bridge mandava `rest` desde
+     * sempre, a placa parseava para d->rest_s, e a decisao aqui olhava
+     * apenas "a lista esta vazia?". Como o bridge tira a sessao da lista
+     * depois de 30s parada, o limiar de verdade era 30 segundos, e mexer em
+     * REPOUSO_S do lado do bridge nao mudava nada na tela.
+     *
+     * No intervalo entre a sessao sair da lista e o repouso comecar, cai no
+     * mascote ocioso generico logo abaixo — que e a leitura certa: nao ha
+     * sessao ativa para nomear, mas tambem ainda nao e hora de desistir dela.
+     *
+     * idade_s < 0 = nenhuma sessao conhecida desde que o bridge subiu. Ai o
+     * relogio entra direto: nao ha trabalho para esperar. */
     bool sem_sessao = (n == 0);
-    bool repouso = sem_sessao && d->hora[0];
+    bool ocioso_bastante = (d->age_s < 0 || d->age_s >= d->rest_s);
+    bool repouso = sem_sessao && d->clock[0] && d->rest_s > 0 && ocioso_bastante;
 
     /* UM mascote, sempre — mesmo com varias sessoes.
      *
@@ -1043,6 +1102,33 @@ void ui_atualizar(const fg_dados_t *d)
     n = 1;
 
     bsp_display_lock(-1);
+
+    /* Bateria: nao depende de modo, layout nem sessao — mas depende do MUTEX.
+     *
+     * Este bloco ja esteve no topo da funcao, antes do bsp_display_lock(), e
+     * aquilo travava a placa. Mexer em objeto do LVGL fora do mutex corre com
+     * a task de render: o watchdog pegou a task de rede presa dentro de
+     * lv_inv_area(), andando numa lista de invalidacao corrompida. Na tela o
+     * sintoma era enganoso — a placa conectava, reportava UMA vez e emudecia,
+     * o que parece problema de rede e nao e.
+     *
+     * Sem medida o rotulo fica VAZIO em vez de "--%". Placa no cabo, sem
+     * celula instalada, e uma configuracao legitima; anunciar ignorancia ali
+     * seria ruido permanente para quem nunca vai usar bateria.
+     *
+     * A cor e o aviso. Cinza e o mesmo tom da data no relogio, ou seja,
+     * informacao de fundo que nao compete com o mascote. Abaixo de 20% vira
+     * o mesmo ambar da temperatura, que ja e a cor de "olhe para mim" nesta
+     * tela — nao inventamos um vermelho novo so para isto. */
+    if (d->battery_pct < 0) {
+        lv_label_set_text(g_bateria, "");
+    } else {
+        bool baixa = d->battery_pct <= 20 && !d->battery_charging;
+        lv_obj_set_style_text_color(g_bateria,
+            baixa ? lv_color_make(232, 132, 90) : lv_color_make(140, 150, 164), 0);
+        lv_label_set_text_fmt(g_bateria, "%d%%%s", d->battery_pct,
+                              d->battery_charging ? " " LV_SYMBOL_CHARGE : "");
+    }
 
     /* Toda troca de arranjo repinta a tela inteira.
      *
@@ -1074,13 +1160,13 @@ void ui_atualizar(const fg_dados_t *d)
             else         lv_obj_add_flag(r[i], LV_OBJ_FLAG_HIDDEN);
         }
         if (repouso) {
-            for (int i = 0; i < FG_MAX_SESSOES; i++) {
+            for (int i = 0; i < WISP_MAX_SESSIONS; i++) {
                 /* A foto entra aqui pelo mesmo motivo que a chama entrou:
                  * e IRMA do corpo, nao filha, entao nao some por heranca.
                  * Sem isto ela fica pairando sobre o relogio — armadilha que
                  * ja pegou o rodape e a chama antes dela. */
-                lv_obj_t *o[] = {g_m[i].corpo, g_m[i].fagulha, g_m[i].detalhe,
-                                 g_m[i].projeto, g_m[i].chama, g_m[i].foto,
+                lv_obj_t *o[] = {g_m[i].corpo, g_m[i].wisp, g_m[i].detail,
+                                 g_m[i].project, g_m[i].chama, g_m[i].foto,
                                  g_m[i].braco[0], g_m[i].braco[1]};
                 for (size_t k = 0; k < 8; k++)
                     if (o[k]) lv_obj_add_flag(o[k], LV_OBJ_FLAG_HIDDEN);
@@ -1098,42 +1184,42 @@ void ui_atualizar(const fg_dados_t *d)
             aplicar_layout(n);
         }
         /* Sem sessão e sem relógio (o bridge caiu antes de mandar a hora):
-         * mostramos um mascote ocioso EXPLÍCITO. Ler d->sessoes[0] aqui
+         * mostramos um mascote ocioso EXPLÍCITO. Ler d->sessions[0] aqui
          * pegaria lixo — quem chama passa um global que guarda a última
          * sessão vista, e a tela exibiria um fantasma de algo já encerrado. */
-        static const fg_sessao_t VAZIA = {.estado = FG_OCIOSO};
+        static const wisp_session_t VAZIA = {.state = WISP_IDLE};
         /* Prioridade: quem PAROU esperando voce fala primeiro. Trabalhando
          * pode aguardar; travado, nao. */
-        static const fg_estado_t URGENCIA[] = {
-            FG_PERGUNTANDO, FG_ESPERANDO, FG_ERRO,
-            FG_FERRAMENTA, FG_TRABALHANDO, FG_CONCLUIDO,
+        static const wisp_state_t URGENCIA[] = {
+            WISP_ASKING, WISP_WAITING, WISP_ERROR,
+            WISP_TOOL, WISP_WORKING, WISP_DONE,
         };
         int esc = 0;
         for (size_t u = 0; u < sizeof(URGENCIA)/sizeof(URGENCIA[0]); u++) {
             bool achou = false;
-            for (int k = 0; k < d->qtd_sessoes; k++)
-                if (d->sessoes[k].estado == URGENCIA[u]) { esc = k; achou = true; break; }
+            for (int k = 0; k < d->session_count; k++)
+                if (d->sessions[k].state == URGENCIA[u]) { esc = k; achou = true; break; }
             if (achou) break;
         }
         for (int i = 0; i < n; i++) {
-            const fg_sessao_t *s = sem_sessao ? &VAZIA : &d->sessoes[esc];
+            const wisp_session_t *s = sem_sessao ? &VAZIA : &d->sessions[esc];
             mascote_t *m = &g_m[i];
-            m->alvo = s->estado;
+            m->alvo = s->state;
 
-            const char *txt = s->detalhe[0] ? s->detalhe : NOME[s->estado];
+            const char *txt = s->detail[0] ? s->detail : NOME[s->state];
             if (strncmp(txt, m->ult_detalhe, sizeof(m->ult_detalhe)) != 0) {
                 snprintf(m->ult_detalhe, sizeof(m->ult_detalhe), "%s", txt);
-                lv_label_set_text(m->detalhe, txt);
+                lv_label_set_text(m->detail, txt);
             }
             /* %.19s: o limite tem que ser EXPLICITO. Sem a precisao, o gcc
              * so ve dois campos de tamanho aberto indo para o mesmo buffer e
              * recusa com format-truncation, que aqui e erro. */
             char pj[28];
-            if (outras > 0) snprintf(pj, sizeof(pj), "%.19s  +%d", s->projeto, outras);
-            else            snprintf(pj, sizeof(pj), "%.27s", s->projeto);
+            if (outras > 0) snprintf(pj, sizeof(pj), "%.19s  +%d", s->project, outras);
+            else            snprintf(pj, sizeof(pj), "%.27s", s->project);
             if (strncmp(pj, m->ult_projeto, sizeof(m->ult_projeto)) != 0) {
                 snprintf(m->ult_projeto, sizeof(m->ult_projeto), "%s", pj);
-                lv_label_set_text(m->projeto, pj);
+                lv_label_set_text(m->project, pj);
             }
         }
     } else {
@@ -1141,15 +1227,15 @@ void ui_atualizar(const fg_dados_t *d)
         /* A hora muda uma vez por minuto; a consulta acontece 100 vezes nesse
          * intervalo. Sem guarda, 100 invalidacoes para o mesmo texto. */
         static char ult_hora[8], ult_dia[20];
-        if (strcmp(d->hora, ult_hora) != 0) {
-            snprintf(ult_hora, sizeof(ult_hora), "%s", d->hora);
-            lv_label_set_text(g_hora, d->hora);
+        if (strcmp(d->clock, ult_hora) != 0) {
+            snprintf(ult_hora, sizeof(ult_hora), "%s", d->clock);
+            lv_label_set_text(g_hora, d->clock);
         }
-        if (strcmp(d->dia, ult_dia) != 0) {
-            snprintf(ult_dia, sizeof(ult_dia), "%s", d->dia);
-            lv_label_set_text(g_dia, d->dia);
+        if (strcmp(d->day, ult_dia) != 0) {
+            snprintf(ult_dia, sizeof(ult_dia), "%s", d->day);
+            lv_label_set_text(g_dia, d->day);
         }
-        if (d->tem_tempo) {
+        if (d->has_weather) {
             /* ARMADILHA DO C: \x consome todos os dígitos hex seguintes.
              * Em "%d\xC2\xB0C" o 'C' é hex válido e some junto com o grau.
              * Fechar o literal antes do 'C' encerra o escape. */
@@ -1158,14 +1244,14 @@ void ui_atualizar(const fg_dados_t *d)
                 ult_t = d->temp; ult_hi = d->temp_max; ult_lo = d->temp_min;
                 snprintf(tmp, sizeof(tmp), "%d\xC2\xB0" "C", d->temp);
                 lv_label_set_text(g_temp, tmp);
-                lv_label_set_text(g_cond, d->condicao);
+                lv_label_set_text(g_cond, d->condition);
                 snprintf(tmp, sizeof(tmp), "max %d\xC2\xB0   min %d\xC2\xB0",
                          d->temp_max, d->temp_min);
                 lv_label_set_text(g_maxmin, tmp);
             }
-            if (strcmp(d->icone, g_icone_atual) != 0) {
-                snprintf(g_icone_atual, sizeof(g_icone_atual), "%s", d->icone);
-                montar_icone(d->icone);
+            if (strcmp(d->icon, g_icone_atual) != 0) {
+                snprintf(g_icone_atual, sizeof(g_icone_atual), "%s", d->icon);
+                montar_icone(d->icon);
             }
         }
     }
@@ -1175,40 +1261,40 @@ void ui_atualizar(const fg_dados_t *d)
      * cada consulta (600ms), cada lv_label_set_text invalidando area, tudo
      * isso SEGURANDO o mutex do LVGL. A task do LVGL, que e quem le o touch,
      * ficava sem rodar — e o deslize demorava segundos para pegar. */
-    uint32_t assinatura = (uint32_t) d->qtd_limites * 2654435761u;
-    for (int i = 0; i < d->qtd_limites && i < MAX_BARRAS; i++) {
-        const fg_limite_t *b = &d->limites[i];
+    uint32_t assinatura = (uint32_t) d->limit_count * 2654435761u;
+    for (int i = 0; i < d->limit_count && i < MAX_BARRAS; i++) {
+        const wisp_limit_t *b = &d->limits[i];
         assinatura = assinatura * 31u + (uint32_t) b->pct;
-        assinatura = assinatura * 31u + (uint32_t) b->ativo;
-        for (const char *c = b->rotulo; *c; c++) assinatura = assinatura * 31u + (uint8_t) *c;
-        for (const char *c = b->reseta; *c; c++) assinatura = assinatura * 31u + (uint8_t) *c;
-        for (const char *c = b->gravidade; *c; c++) assinatura = assinatura * 31u + (uint8_t) *c;
+        assinatura = assinatura * 31u + (uint32_t) b->active;
+        for (const char *c = b->label; *c; c++) assinatura = assinatura * 31u + (uint8_t) *c;
+        for (const char *c = b->resets_in; *c; c++) assinatura = assinatura * 31u + (uint8_t) *c;
+        for (const char *c = b->severity; *c; c++) assinatura = assinatura * 31u + (uint8_t) *c;
     }
-    assinatura = assinatura * 31u + (uint32_t)(d->limites_idade_s / 60);
+    assinatura = assinatura * 31u + (uint32_t)(d->limits_age_s / 60);
 
     static uint32_t ult_assinatura = 0;
     if (assinatura != ult_assinatura) {
         ult_assinatura = assinatura;
 
         for (int i = 0; i < MAX_BARRAS; i++) {
-            if (i >= d->qtd_limites) {
+            if (i >= d->limit_count) {
                 lv_label_set_text(g_bar_rotulo[i], "");
                 lv_label_set_text(g_bar_pct[i], "");
                 lv_label_set_text(g_bar_reset[i], "");
                 lv_obj_add_flag(g_bar[i], LV_OBJ_FLAG_HIDDEN);
                 continue;
             }
-            const fg_limite_t *b = &d->limites[i];
+            const wisp_limit_t *b = &d->limits[i];
             lv_obj_remove_flag(g_bar[i], LV_OBJ_FLAG_HIDDEN);
 
             lv_color_t cor = lv_color_make(95, 207, 142);
-            if (!strcmp(b->gravidade, "warning"))  cor = lv_color_make(232, 193, 90);
-            if (!strcmp(b->gravidade, "critical")) cor = lv_color_make(232,  98, 74);
+            if (!strcmp(b->severity, "warning"))  cor = lv_color_make(232, 193, 90);
+            if (!strcmp(b->severity, "critical")) cor = lv_color_make(232,  98, 74);
 
             char tmp[40];
-            lv_label_set_text(g_bar_rotulo[i], b->rotulo);
+            lv_label_set_text(g_bar_rotulo[i], b->label);
             lv_obj_set_style_text_color(g_bar_rotulo[i],
-                b->ativo ? lv_color_make(232, 238, 246) : lv_color_make(140, 150, 164), 0);
+                b->active ? lv_color_make(232, 238, 246) : lv_color_make(140, 150, 164), 0);
 
             snprintf(tmp, sizeof(tmp), "%d%%", b->pct);
             lv_label_set_text(g_bar_pct[i], tmp);
@@ -1217,8 +1303,8 @@ void ui_atualizar(const fg_dados_t *d)
             lv_bar_set_value(g_bar[i], b->pct, LV_ANIM_OFF);
             lv_obj_set_style_bg_color(g_bar[i], cor, LV_PART_INDICATOR);
 
-            if (b->reseta[0]) {
-                snprintf(tmp, sizeof(tmp), "resets in %s", b->reseta);
+            if (b->resets_in[0]) {
+                snprintf(tmp, sizeof(tmp), "resets in %s", b->resets_in);
                 lv_label_set_text(g_bar_reset[i], tmp);
             } else {
                 lv_label_set_text(g_bar_reset[i], "");
@@ -1226,13 +1312,38 @@ void ui_atualizar(const fg_dados_t *d)
         }
 
         char fr[48];
-        if (d->limites_idade_s < 0) snprintf(fr, sizeof(fr), "limits unavailable");
-        else snprintf(fr, sizeof(fr), "%d min ago", d->limites_idade_s / 60);
+        if (d->limits_age_s < 0) snprintf(fr, sizeof(fr), "limits unavailable");
+        else snprintf(fr, sizeof(fr), "%d min ago", d->limits_age_s / 60);
         lv_label_set_text(g_frescor, fr);
         lv_obj_set_style_text_color(g_frescor,
-            d->limites_idade_s > 900 ? lv_color_make(232, 193, 90)
+            d->limits_age_s > 900 ? lv_color_make(232, 193, 90)
                                      : lv_color_make(120, 128, 140), 0);
     }
 
+    bsp_display_unlock();
+}
+
+void ui_swipe(int direcao)
+{
+    if (!g_tv || direcao == 0) return;
+
+    /* MUTEX. Nao e opcional e nao e paranoia: esta funcao e chamada da task
+     * dos botoes, e mexer em objeto do LVGL fora do mutex ja travou esta
+     * placa uma vez hoje — o watchdog pegou a task de rede presa dentro de
+     * lv_inv_area(), numa lista de invalidacao corrompida por corrida com o
+     * render. O sintoma nao parece nada com "esqueci um lock". */
+    bsp_display_lock(-1);
+
+    lv_obj_t *atual = lv_tileview_get_tile_active(g_tv);
+    int i = 0;
+    for (int k = 0; k < QTD_TELAS; k++) if (g_telas[k] == atual) { i = k; break; }
+
+    /* Para na ponta em vez de dar a volta. O deslizar ja se comporta assim —
+     * nao ha tela a direita do painel — e dois gestos para a mesma navegacao
+     * precisam concordar, senao o botao parece bugado para quem usa os dois. */
+    int destino = i + direcao;
+    if (destino < 0 || destino >= QTD_TELAS) { bsp_display_unlock(); return; }
+
+    lv_tileview_set_tile(g_tv, g_telas[destino], LV_ANIM_ON);
     bsp_display_unlock();
 }

@@ -1,5 +1,5 @@
 /*
- * Fagulha — mascote de status do Claude Code
+ * Wisp — mascote de status do Claude Code
  * ESP32-S3-Touch-AMOLED-2.16 (480x480, CO5300 QSPI, touch CST9220)
  *
  * Fluxo: NVS (credenciais) -> WiFi -> mDNS resolve o Mac -> GET /state -> tela.
@@ -15,6 +15,7 @@
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
 #include "esp_log.h"
+#include "driver/gpio.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_netif.h"
@@ -30,11 +31,12 @@
 #include "bsp/touch.h"
 #include "esp_lv_adapter.h"
 #include "qmi8658.h"
+#include "pmic.h"
 #include "ui.h"
 
-static const char *TAG = "fagulha";
+static const char *TAG = "wisp";
 
-#define NVS_NS        "fagulha"
+#define NVS_NS        "wisp"
 #define PORTA_BRIDGE  4666
 #define INTERVALO_MS  600      /* pausa entre consultas ao /state */
 #define RESP_MAX      2048     /* /state mede ~290 bytes; folga de 7x */
@@ -44,9 +46,12 @@ static EventGroupHandle_t s_eventos;
 static char s_host[64] = {0};      /* ex.: "Marcios-MacBook-Pro-6.local" */
 static char s_token[64] = {0};     /* segredo compartilhado com o bridge */
 static char s_ip[16]   = {0};      /* resolvido por mDNS */
-static fg_dados_t s_dados;
+static wisp_data_t s_dados;
 static esp_lcd_panel_handle_t s_painel = NULL;   /* guardado para rotacionar */
 static esp_lcd_touch_handle_t s_toque = NULL;    /* idem: gira junto com a tela */
+static bool s_pmic_ok = false;
+static int  s_bat_pct = -1;                      /* -1 = ainda nao lida */
+static bool s_bat_carregando = false;
 
 /* ————————————————————————————————————————————————
  *  Display
@@ -285,6 +290,62 @@ static bool iniciar_imu(void)
     return true;
 }
 
+/* Botoes fisicos: passar de tela sem tocar no vidro.
+ *
+ * Os pinos foram MEDIDOS, nao supostos — o BSP declara BSP_CAPS_BUTTONS 0 e
+ * nao documenta nenhum. Uma varredura dos GPIO livres com os tres apertados
+ * em ordem deu: esquerdo GPIO0, meio GPIO16, direito GPIO18.
+ *
+ * O do meio fica de fora por enquanto: as pontas ja significam "para o lado",
+ * que e o gesto que o tileview faz. O do meio quer dizer outra coisa, e usar
+ * antes de saber o que seria escolher por ele.
+ *
+ * POLARIDADE DIFERENTE, e por isso ela e explicita aqui: as pontas repousam
+ * em 1 e vao a 0 quando apertadas; o do meio repousa em 0. Assumir "botao e
+ * ativo em nivel baixo" funcionaria para os dois que usamos e quebraria no
+ * terceiro, no dia em que alguem o ligasse.
+ *
+ * GPIO0 e tambem o pino de BOOT. Usa-lo em tempo de execucao e seguro — ele
+ * so e amostrado no reset —, mas segurar o botao esquerdo ENQUANTO a placa
+ * liga entra em modo de gravacao em vez de subir o firmware. */
+#define BOTAO_ESQ  GPIO_NUM_0
+#define BOTAO_DIR  GPIO_NUM_18
+#define BOTAO_ATIVO 0        /* nivel logico dos dois das pontas quando apertados */
+
+static void tarefa_botoes(void *arg)
+{
+    (void) arg;
+    const gpio_num_t pinos[2] = {BOTAO_ESQ, BOTAO_DIR};
+    const int direcao[2] = {-1, +1};
+    int anterior[2] = {!BOTAO_ATIVO, !BOTAO_ATIVO};
+
+    for (int i = 0; i < 2; i++) {
+        gpio_config_t c = {
+            .pin_bit_mask = 1ULL << pinos[i],
+            .mode = GPIO_MODE_INPUT,
+            .pull_up_en = GPIO_PULLUP_ENABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type = GPIO_INTR_DISABLE,
+        };
+        gpio_config(&c);
+    }
+
+    while (1) {
+        for (int i = 0; i < 2; i++) {
+            int nivel = gpio_get_level(pinos[i]);
+            /* Age na BORDA de descida, nao no nivel: senao segurar o botao
+             * viraria uma enxurrada de trocas de tela a 25 por segundo. */
+            if (nivel == BOTAO_ATIVO && anterior[i] != BOTAO_ATIVO) {
+                ui_swipe(direcao[i]);
+            }
+            anterior[i] = nivel;
+        }
+        /* 40ms: acima da trepidacao mecanica do contato e bem abaixo do que
+         * um dedo percebe como atraso. */
+        vTaskDelay(pdMS_TO_TICKS(40));
+    }
+}
+
 static void tarefa_orientacao(void *arg)
 {
     (void) arg;
@@ -383,8 +444,9 @@ static void ao_evento(void *arg, esp_event_base_t base, int32_t id, void *dados)
         esp_wifi_connect();
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         xEventGroupClearBits(s_eventos, BIT_CONECTADO);
-        ESP_LOGW(TAG, "WiFi caiu, reconectando");
         s_ip[0] = '\0';                 /* força resolver mDNS de novo */
+
+        ESP_LOGW(TAG, "WiFi caiu, reconectando");
         vTaskDelay(pdMS_TO_TICKS(2000));
         esp_wifi_connect();
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
@@ -394,12 +456,30 @@ static void ao_evento(void *arg, esp_event_base_t base, int32_t id, void *dados)
     }
 }
 
+/* Namespace anterior ao nome Wisp.
+ *
+ * A NVS sobrevive ao `idf.py flash` — e essa e a graca dela, senao trocar de
+ * firmware pediria a senha do WiFi toda vez. Mas o namespace faz parte da
+ * CHAVE: renomear o projeto de fagulha para wisp tornou invisiveis as
+ * credenciais que ja estavam gravadas, e a placa subiria sem rede sem dizer
+ * por que.
+ *
+ * Ler o nome antigo como reserva custa uma tentativa no boot e evita que uma
+ * renomeacao vire "va reprovisionar". Some quando nao houver mais placa
+ * gravada antes da troca — mas quem decide isso e o hardware la fora, nao a
+ * gente. */
+#define NVS_NS_LEGADO "fagulha"
+
 static bool ler_credenciais(char *ssid, size_t ssid_n, char *senha, size_t senha_n)
 {
     nvs_handle_t h;
     if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) {
-        ESP_LOGW(TAG, "namespace '%s' não existe na NVS", NVS_NS);
-        return false;
+        if (nvs_open(NVS_NS_LEGADO, NVS_READONLY, &h) != ESP_OK) {
+            ESP_LOGW(TAG, "nem '%s' nem '%s' existem na NVS", NVS_NS, NVS_NS_LEGADO);
+            return false;
+        }
+        ESP_LOGW(TAG, "credenciais no namespace antigo '%s' — reprovisione quando puder",
+                 NVS_NS_LEGADO);
     }
     bool ok = nvs_get_str(h, "ssid", ssid, &ssid_n) == ESP_OK
            && nvs_get_str(h, "pass", senha, &senha_n) == ESP_OK;
@@ -464,7 +544,7 @@ static bool iniciar_wifi(void)
 
 /* Descobre onde esta o bridge.
  *
- * PRIMEIRO por SERVICO mDNS (_fagulha._tcp), depois pelo hostname gravado na
+ * PRIMEIRO por SERVICO mDNS (_wisp._tcp), depois pelo hostname gravado na
  * NVS como reserva.
  *
  * Motivo: o macOS deriva o LocalHostName do ComputerName e acrescenta "-N"
@@ -475,7 +555,7 @@ static bool iniciar_wifi(void)
 static bool resolver_host(void)
 {
     mdns_result_t *r = NULL;
-    if (mdns_query_ptr("_fagulha", "_tcp", 3000, 4, &r) == ESP_OK && r) {
+    if (mdns_query_ptr("_wisp", "_tcp", 3000, 4, &r) == ESP_OK && r) {
         for (mdns_result_t *it = r; it; it = it->next) {
             if (it->addr) {
                 esp_ip4_addr_t a = it->addr->addr.u_addr.ip4;
@@ -538,70 +618,70 @@ static void copiar_str(char *dst, size_t n, const cJSON *o, const char *chave)
     }
 }
 
-static bool interpretar(const char *json, fg_dados_t *d)
+static bool interpretar(const char *json, wisp_data_t *d)
 {
     cJSON *raiz = cJSON_Parse(json);
     if (!raiz) return false;
 
     /* Uma sessao do Claude = um mascote. O bridge manda em "s", mais
-     * recentes primeiro, ja limitado a FG_MAX_SESSOES. */
-    d->qtd_sessoes = 0;
+     * recentes primeiro, ja limitado a WISP_MAX_SESSIONS. */
+    d->session_count = 0;
     const cJSON *ses = cJSON_GetObjectItemCaseSensitive(raiz, "s"), *it_s = NULL;
     cJSON_ArrayForEach(it_s, ses) {
-        if (d->qtd_sessoes >= FG_MAX_SESSOES) break;
-        fg_sessao_t *sx = &d->sessoes[d->qtd_sessoes];
+        if (d->session_count >= WISP_MAX_SESSIONS) break;
+        wisp_session_t *sx = &d->sessions[d->session_count];
         char st[16];
         copiar_str(st, sizeof(st), it_s, "st");
-        sx->estado = ui_estado_de_texto(st);
-        copiar_str(sx->detalhe, sizeof(sx->detalhe), it_s, "dt");
-        copiar_str(sx->projeto, sizeof(sx->projeto), it_s, "pj");
-        copiar_str(sx->modelo,  sizeof(sx->modelo),  it_s, "md");
+        sx->state = ui_state_from_text(st);
+        copiar_str(sx->detail, sizeof(sx->detail), it_s, "dt");
+        copiar_str(sx->project, sizeof(sx->project), it_s, "pj");
+        copiar_str(sx->model,  sizeof(sx->model),  it_s, "md");
         const cJSON *a = cJSON_GetObjectItemCaseSensitive(it_s, "age");
-        sx->idade_s = cJSON_IsNumber(a) ? a->valueint : -1;
-        d->qtd_sessoes++;
+        sx->age_s = cJSON_IsNumber(a) ? a->valueint : -1;
+        d->session_count++;
     }
     /* qtd_sessoes == 0 e um estado VALIDO: nenhuma sessao ativa. A UI
      * interpreta isso como "mostre o relogio". Nao inventamos uma sessao
      * fantasma aqui. */
 
     const cJSON *idade = cJSON_GetObjectItemCaseSensitive(raiz, "lim_age");
-    d->limites_idade_s = cJSON_IsNumber(idade) ? idade->valueint : -1;
+    d->limits_age_s = cJSON_IsNumber(idade) ? idade->valueint : -1;
 
     /* —— modo repouso: relógio e tempo —— */
-    copiar_str(d->hora, sizeof(d->hora), raiz, "clk");
-    copiar_str(d->dia,  sizeof(d->dia),  raiz, "day");
+    copiar_str(d->clock, sizeof(d->clock), raiz, "clk");
+    copiar_str(d->day,  sizeof(d->day),  raiz, "day");
     const cJSON *n;
     n = cJSON_GetObjectItemCaseSensitive(raiz, "age");
-    d->idade_s = cJSON_IsNumber(n) ? n->valueint : -1;
+    d->age_s = cJSON_IsNumber(n) ? n->valueint : -1;
     n = cJSON_GetObjectItemCaseSensitive(raiz, "rest");
-    d->repouso_s = cJSON_IsNumber(n) ? n->valueint : 0;
+    d->rest_s = cJSON_IsNumber(n) ? n->valueint : 0;
 
-    d->tem_tempo = false;
+    d->has_weather = false;
     const cJSON *wx = cJSON_GetObjectItemCaseSensitive(raiz, "wx");
     if (cJSON_IsObject(wx)) {
-        copiar_str(d->condicao, sizeof(d->condicao), wx, "c");
-        copiar_str(d->icone,    sizeof(d->icone),    wx, "i");
+        copiar_str(d->condition, sizeof(d->condition), wx, "c");
+        copiar_str(d->icon,    sizeof(d->icon),    wx, "i");
         n = cJSON_GetObjectItemCaseSensitive(wx, "t");
         d->temp = cJSON_IsNumber(n) ? n->valueint : 0;
         n = cJSON_GetObjectItemCaseSensitive(wx, "hi");
         d->temp_max = cJSON_IsNumber(n) ? n->valueint : 0;
         n = cJSON_GetObjectItemCaseSensitive(wx, "lo");
         d->temp_min = cJSON_IsNumber(n) ? n->valueint : 0;
-        d->tem_tempo = d->condicao[0] != '\0';
+        d->has_weather = d->condition[0] != '\0';
     }
 
-    d->qtd_limites = 0;
+    d->limit_count = 0;
     const cJSON *lim = cJSON_GetObjectItemCaseSensitive(raiz, "lim"), *it = NULL;
     cJSON_ArrayForEach(it, lim) {
-        if (d->qtd_limites >= 4) break;
-        fg_limite_t *b = &d->limites[d->qtd_limites];
-        copiar_str(b->rotulo,    sizeof(b->rotulo),    it, "l");
-        copiar_str(b->reseta,    sizeof(b->reseta),    it, "r");
-        copiar_str(b->gravidade, sizeof(b->gravidade), it, "s");
+        if (d->limit_count >= 4) break;
+        wisp_limit_t *b = &d->limits[d->limit_count];
+        copiar_str(b->label,    sizeof(b->label),    it, "l");
+        copiar_str(b->resets_in,    sizeof(b->resets_in),    it, "r");
+        copiar_str(b->severity, sizeof(b->severity), it, "s");
         const cJSON *p = cJSON_GetObjectItemCaseSensitive(it, "p");
         b->pct = cJSON_IsNumber(p) ? p->valueint : 0;
-        b->ativo = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(it, "a"));
-        d->qtd_limites++;
+        b->active = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(it, "a"));
+        d->limit_count++;
     }
 
     cJSON_Delete(raiz);
@@ -618,20 +698,44 @@ static void tarefa_rede(void *arg)
     while (1) {
         xEventGroupWaitBits(s_eventos, BIT_CONECTADO, pdFALSE, pdTRUE, portMAX_DELAY);
 
+
         if (s_ip[0] == '\0' && !resolver_host()) {
             /* Antes isto so dava `continue` e a tela ficava eternamente em
              * "connecting" — mentindo, porque o WiFi ja estava conectado e o
              * que faltava era achar o bridge. Agora a tela diz a verdade. */
-            fg_dados_t nd = {.qtd_sessoes = 1, .limites_idade_s = -1};
-            nd.sessoes[0].estado = FG_SEM_REDE;
-            snprintf(nd.sessoes[0].detalhe, sizeof(nd.sessoes[0].detalhe),
+            wisp_data_t nd = {.session_count = 1, .limits_age_s = -1};
+            nd.sessions[0].state = WISP_OFFLINE;
+            snprintf(nd.sessions[0].detail, sizeof(nd.sessions[0].detail),
                      "bridge not found");
-            ui_atualizar(&nd);
+            ui_update(&nd);
             vTaskDelay(pdMS_TO_TICKS(5000));
             continue;
         }
 
-        snprintf(url, sizeof(url), "http://%s:%d/state", s_ip, PORTA_BRIDGE);
+        /* Bateria: leitura lenta de proposito. A carga muda em escala de
+         * horas, e cada leitura sao tres transacoes no mesmo barramento I2C
+         * do touch. Consultar a cada 600ms disputaria o barramento por um
+         * numero que quase sempre nao mudou. A cada 50 voltas = 30s.
+         *
+         * voltas comeca em 0, entao a primeira leitura sai no primeiro laco:
+         * a placa nao passa meio minuto mostrando "--" no boot. */
+        if (s_pmic_ok && voltas % 50 == 0) {
+            int pct = 0;
+            bool carregando = false;
+            if (pmic_read(&pct, &carregando)) {
+                s_bat_pct = pct;
+                s_bat_carregando = carregando;
+            }
+        }
+
+        /* A carga vai junto na consulta que ja faziamos, como parametro de
+         * query. Um POST separado so para isso dobraria o transito de rede
+         * da placa para mandar um byte. */
+        int n_url = snprintf(url, sizeof(url), "http://%s:%d/state", s_ip, PORTA_BRIDGE);
+        if (s_bat_pct >= 0 && n_url > 0 && n_url < (int) sizeof(url)) {
+            snprintf(url + n_url, sizeof(url) - n_url, "?bat=%d&chg=%d",
+                     s_bat_pct, s_bat_carregando ? 1 : 0);
+        }
         coleta_t c = {.buf = buf, .usado = 0};
         esp_http_client_config_t cfg = {
             .url = url, .event_handler = ao_http, .user_data = &c,
@@ -646,7 +750,7 @@ static void tarefa_rede(void *arg)
          * Vazio é legítimo: instalação com `exigir_token: false`, que existe
          * para placas gravadas antes deste campo. Aí não mandamos header. */
         if (s_token[0]) {
-            esp_http_client_set_header(cli, "X-Fagulha-Token", s_token);
+            esp_http_client_set_header(cli, "X-Wisp-Token", s_token);
         }
         esp_err_t r = esp_http_client_perform(cli);
         int status = esp_http_client_get_status_code(cli);
@@ -655,18 +759,22 @@ static void tarefa_rede(void *arg)
         if (r == ESP_OK && status == 200 && c.usado > 0) {
             falhas = 0;
             if (interpretar(buf, &s_dados)) {
-                ui_atualizar(&s_dados);
+                /* Depois do interpretar: a bateria e medida aqui, nao vem do
+                 * bridge, e nao pode ser sobrescrita pela resposta dele. */
+                s_dados.battery_pct = s_bat_pct;
+                s_dados.battery_charging = s_bat_carregando;
+                ui_update(&s_dados);
             }
         } else if (++falhas == 5) {
             /* Cinco erros seguidos: o bridge caiu ou o IP mudou.
              * Zera o IP para forçar nova resolução mDNS na volta. */
             ESP_LOGW(TAG, "bridge inacessível (%s, status %d)", esp_err_to_name(r), status);
             s_ip[0] = '\0';
-            fg_dados_t off = {.qtd_sessoes = 1, .limites_idade_s = -1};
-            off.sessoes[0].estado = FG_SEM_REDE;
-            snprintf(off.sessoes[0].detalhe, sizeof(off.sessoes[0].detalhe),
+            wisp_data_t off = {.session_count = 1, .limits_age_s = -1};
+            off.sessions[0].state = WISP_OFFLINE;
+            snprintf(off.sessions[0].detail, sizeof(off.sessions[0].detail),
                      "bridge offline");
-            ui_atualizar(&off);
+            ui_update(&off);
         }
 
         /* A RAM interna é o recurso disputado entre a pilha WiFi e o buffer
@@ -715,12 +823,25 @@ void app_main(void)
      *    `if (bsp_display_lock(-1))` estaria invertido. Por isso não testo.
      */
     bsp_display_lock(-1);
-    ui_criar();
+    ui_create();
     bsp_display_unlock();
 
     /* IMU depois do display: o BSP cria o barramento I2C durante o
      * bsp_touch_new(), então bsp_i2c_get_handle() só é válido a partir daqui. */
     s_imu_ok = iniciar_imu();
+    /* PMIC junto da IMU, no boot — e NAO dentro da task de rede.
+     *
+     * TENTADO E REVERTIDO: mover para depois do WiFi conectar, na teoria para
+     * nao disputar RAM interna com a associacao. Na pratica travou a task de
+     * rede inteira: o log parava no IP e nunca mais aparecia mDNS, consulta
+     * nem o proprio "AXP2101 pronto". Abrir dispositivo I2C ali, com o
+     * barramento ja em uso pelo touch, nao volta.
+     *
+     * E a premissa era falsa de todo jeito: a falha de WiFi desta placa
+     * acontece igual no firmware sem PMIC nenhum (medido, 6/8 contra 4/8 em
+     * 8 boots cada — indistinguivel). Nao havia o que otimizar aqui. */
+    s_pmic_ok = pmic_start(bsp_i2c_get_handle());
+    xTaskCreate(tarefa_botoes, "botoes", 2560, NULL, 3, NULL);
     if (s_imu_ok) {
         xTaskCreate(tarefa_orientacao, "orient", 3072, NULL, 3, NULL);
     }
@@ -728,18 +849,18 @@ void app_main(void)
     s_eventos = xEventGroupCreate();
 
     memset(&s_dados, 0, sizeof(s_dados));
-    s_dados.qtd_sessoes = 1;
-    s_dados.sessoes[0].estado = FG_SEM_REDE;
-    s_dados.limites_idade_s = -1;
-    s_dados.bateria_pct = -1;
+    s_dados.session_count = 1;
+    s_dados.sessions[0].state = WISP_OFFLINE;
+    s_dados.limits_age_s = -1;
+    s_dados.battery_pct = -1;
 
     if (!iniciar_wifi()) {
         ESP_LOGE(TAG, "sem credenciais na NVS — rode bridge/provision_wifi.py");
-        snprintf(s_dados.sessoes[0].detalhe, sizeof(s_dados.sessoes[0].detalhe), "no wifi setup");
-        ui_atualizar(&s_dados);
+        snprintf(s_dados.sessions[0].detail, sizeof(s_dados.sessions[0].detail), "no wifi setup");
+        ui_update(&s_dados);
     } else {
-        snprintf(s_dados.sessoes[0].detalhe, sizeof(s_dados.sessoes[0].detalhe), "connecting");
-        ui_atualizar(&s_dados);
+        snprintf(s_dados.sessions[0].detail, sizeof(s_dados.sessions[0].detail), "connecting");
+        ui_update(&s_dados);
         ESP_ERROR_CHECK(mdns_init());
         xTaskCreate(tarefa_rede, "rede", 6144, NULL, 5, NULL);
     }

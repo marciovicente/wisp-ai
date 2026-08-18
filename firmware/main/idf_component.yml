@@ -1,17 +1,17 @@
 ## IDF Component Manager Manifest File
 dependencies:
-  # BSP oficial da Waveshare para esta placa: já traz o driver CO5300 (QSPI),
-  # o touch CST9220, o AXP2101 e a integração com LVGL prontos.
+  # Waveshare's official BSP for this board: it already ships the CO5300 driver
+  # (QSPI), the CST9220 touch, the AXP2101 and the LVGL integration.
   waveshare/esp32_s3_touch_amoled_2_16:
     version: "^2.0.1"
   lvgl/lvgl:
     version: "9.*"
     public: true
-  # Resolve "<mac>.local" — o macOS anuncia isso sozinho, então a placa
-  # sobrevive a troca de IP pelo DHCP sem reconfiguração.
+  # Resolves "<mac>.local" — macOS announces that on its own, so the board
+  # survives a DHCP address change without being reconfigured.
   espressif/mdns:
     version: "^1.8"
-  # IMU de 6 eixos: usamos o acelerômetro para saber para que lado a placa
-  # está virada e girar a tela junto.
+  # 6-axis IMU: we use the accelerometer to know which way the board is turned
+  # and rotate the screen with it.
   waveshare/qmi8658:
     version: "*"

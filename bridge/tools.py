@@ -20,11 +20,13 @@ Anyone who already has ESP-IDF exported loses nothing: the venv is small
 way.
 """
 
+import json
 import subprocess
 import sys
 import venv
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parent.parent
 FOLDER = Path.home() / ".wisp" / "tools"
 PYTHON = FOLDER / "bin" / "python"
 
@@ -76,6 +78,37 @@ def ensure(quiet: bool = False) -> Path:
     if not quiet:
         print("    ok")
     return PYTHON
+
+
+def chip(folder: "Path | None" = None) -> str:
+    """
+    Which chip to tell esptool it is talking to.
+
+    Read from the binaries' own flasher_args.json — the file ESP-IDF writes at
+    build time — instead of hardcoded. This used to say "esp32s3" in four
+    places, which was true while the S3 was the only supported board.
+
+    Getting it wrong is not cosmetic: the S3 is Xtensa and the C6 is RISC-V,
+    and an image built for one does not run on the other. Passing the chip
+    explicitly is what makes esptool REFUSE the mismatch instead of writing a
+    binary that boot-loops.
+
+    Falls back to "auto" (esptool asks the chip itself) when there is nothing
+    to read from — writing NVS, for instance, which is data and identical on
+    every target.
+    """
+    candidates = []
+    if folder:
+        candidates.append(Path(folder) / "flasher_args.json")
+    candidates.append(ROOT / "firmware" / "build" / "flasher_args.json")
+    for c in candidates:
+        try:
+            value = json.loads(c.read_text())["extra_esptool_args"]["chip"]
+        except (OSError, KeyError, ValueError):
+            continue
+        if value:
+            return value
+    return "auto"
 
 
 def esptool(*args: str, **kw) -> subprocess.CompletedProcess:

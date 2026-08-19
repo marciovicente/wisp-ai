@@ -115,7 +115,7 @@ def files(folder: Path) -> list:
 
 # ——————————————————————————————————————————————————————————————————— steps
 
-def save_factory_firmware(port: str) -> None:
+def save_factory_firmware(port: str, folder: Path) -> None:
     """
     The board ships with a Waveshare demo nobody gets back afterwards: it is
     not distributed anywhere. We ask BEFORE writing anything, because asking
@@ -136,7 +136,7 @@ def save_factory_firmware(port: str) -> None:
     print("==> reading 16MB of flash (do not unplug)")
     # Default speed on purpose: the board's USB is native, --baud 921600 buys
     # nothing and provokes failures mid-read.
-    r = tools.esptool("--chip", "esp32s3", "--port", port,
+    r = tools.esptool("--chip", tools.chip(folder), "--port", port,
                       "read_flash", "0", "0x1000000", str(dest))
     if r.returncode != 0:
         dest.unlink(missing_ok=True)
@@ -145,18 +145,19 @@ def save_factory_firmware(port: str) -> None:
 
 
 def write_firmware(port: str, folder: Path, erase: bool) -> None:
+    chip = tools.chip(folder)
     if erase:
         print("==> erasing the whole flash")
-        tools.esptool("--chip", "esp32s3", "--port", port, "erase_flash", check=True)
+        tools.esptool("--chip", chip, "--port", port, "erase_flash", check=True)
 
     parts = files(folder)
-    print(f"==> writing {len(parts)} partitions")
+    print(f"==> writing {len(parts)} partitions to {chip}")
     args = []
     for offset, path in parts:
         print(f"    {offset:>10}  {path.name}")
         args += [offset, str(path)]
 
-    r = tools.esptool("--chip", "esp32s3", "--port", port,
+    r = tools.esptool("--chip", chip, "--port", port,
                       "--before", "default_reset", "--after", "hard_reset",
                       "write_flash", "--flash_mode", "dio",
                       "--flash_freq", "80m", "--flash_size", "16MB", *args)
@@ -193,7 +194,7 @@ def main() -> int:
 
     try:
         if not args.no_backup:
-            save_factory_firmware(port)
+            save_factory_firmware(port, folder)
         write_firmware(port, folder, args.erase)
     finally:
         if tmp:

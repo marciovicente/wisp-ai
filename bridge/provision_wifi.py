@@ -15,6 +15,7 @@ built the first time. See bridge/tools.py.
 
 from __future__ import annotations
 
+import csv as _csv
 import os
 import shutil
 import subprocess
@@ -38,15 +39,56 @@ NAMESPACE = "wisp"
 DEFAULT_HOST = "wisp.local"
 
 
+def _prompt(question: str) -> str:
+    """
+    Reads one answer, from the terminal even when stdin is not one.
+
+    Run from inside a tool that pipes stdin — an editor's task runner, an agent
+    shell — `input()` gets EOF immediately and the script dies with EOFError
+    before asking anything. install.sh already deals with this by reading from
+    /dev/tty; this is the same trick, and getpass() below does it on its own.
+
+    When there is no terminal at all (CI, cron) there is nothing to ask, and
+    saying so beats an EOFError traceback.
+    """
+    if sys.stdin.isatty():
+        return input(question).strip()
+    try:
+        with open("/dev/tty", "r+") as tty:
+            tty.write(question)
+            tty.flush()
+            answer = tty.readline()
+    except OSError:
+        sys.exit("no terminal to ask on: run this from a terminal, "
+                 "or set the WiFi with ./flash.sh instead.")
+    if not answer:
+        sys.exit("no answer (end of input).")
+    return answer.strip()
+
+
 def ask(port: str) -> dict:
     print(f"board   : {port}\n")
 
-    ssid = input("WiFi SSID: ").strip()
+    ssid = _prompt("WiFi SSID: ")
     if not ssid:
         sys.exit("empty SSID.")
-    password = getpass("password (not shown): ")
+    # DUAS VEZES, e nao por burocracia.
+    #
+    # A senha e digitada as cegas e vai direto para a NVS; um caractere errado
+    # nao aparece em lugar nenhum. O aparelho associa ao AP normalmente e falha
+    # so no handshake WPA, e na tela isso se parece com qualquer outro problema
+    # de rede: "connecting" para sempre. Custou uma sessao inteira de debug
+    # descobrir que era isso — o reason 15 do driver e um dos poucos sinais, e
+    # ele nao chega a quem esta olhando a telinha.
+    for tentativa in range(3):
+        password = getpass("password (not shown): ")
+        if password == getpass("password again: "):
+            break
+        print("  the two do not match; try again.")
+    else:
+        sys.exit("password typed differently three times.")
 
-    host = input(f"bridge host [{DEFAULT_HOST}]: ").strip() or DEFAULT_HOST
+    host = _prompt(f"bridge host [{DEFAULT_HOST}]: ") or DEFAULT_HOST
 
     if len(ssid) > 32 or len(password) > 64:
         sys.exit("SSID (max 32) or password (max 64) too long for WiFi.")
@@ -65,8 +107,9 @@ def ask(port: str) -> dict:
 def write(port: str, data: dict) -> int:
     # The board only does 2.4GHz. We cannot detect the band from here, so we
     # warn instead.
-    print("\nreminder: the ESP32-S3 only connects to 2.4GHz. If your network is "
-          "5GHz-only, the connection fails even with the right password.")
+    print("\nreminder: the board only connects to 2.4GHz (true of both the S3 and "
+          "the C6). If your network is 5GHz-only, the connection fails even "
+          "with the right password.")
 
     tools.ensure()
 
@@ -74,10 +117,21 @@ def write(port: str, data: dict) -> int:
     os.chmod(tmp, 0o700)
     csv, binary = tmp / "nvs.csv", tmp / "nvs.bin"
     try:
-        # The generator requires the namespace line before the keys.
-        lines = ["key,type,encoding,value", f"{NAMESPACE},namespace,,"]
-        lines += [f"{k},data,string,{v}" for k, v in data.items()]
-        csv.write_text("\n".join(lines) + "\n")
+        # QUOTING PELO MODULO csv, nao por interpolacao.
+        #
+        # Isto era montado com f"{k},data,string,{v}". Uma senha com virgula
+        # saia partida em duas colunas, e o gerador (que le com csv.DictReader)
+        # engolia so o primeiro pedaco: a placa recebia uma senha diferente da
+        # digitada, sem erro nenhum no caminho. Aspas na senha davam no mesmo.
+        # O writer do modulo csv cita e escapa o que precisa, e o DictReader do
+        # outro lado desfaz — os dois falam o mesmo dialeto.
+        with open(csv, "w", newline="", encoding="utf-8") as fh:
+            w = _csv.writer(fh)
+            w.writerow(["key", "type", "encoding", "value"])
+            # O gerador exige a linha de namespace antes das chaves.
+            w.writerow([NAMESPACE, "namespace", "", ""])
+            for k, v in data.items():
+                w.writerow([k, "data", "string", v])
         os.chmod(csv, 0o600)
 
         print("\ngenerating the NVS partition…")
@@ -85,7 +139,7 @@ def write(port: str, data: dict) -> int:
                       check=True, capture_output=True, text=True)
 
         print(f"writing at {NVS_OFFSET}…")
-        tools.esptool("--chip", "esp32s3", "--port", port, "--after", "hard_reset",
+        tools.esptool("--chip", tools.chip(), "--port", port, "--after", "hard_reset",
                       "write_flash", NVS_OFFSET, str(binary), check=True)
     except subprocess.CalledProcessError as exc:
         out = (exc.stderr or exc.stdout or "").strip()

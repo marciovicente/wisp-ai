@@ -190,9 +190,13 @@ struct Panel: View {
                 SectionHeader(title: "Subscription limits")
                 Spacer()
                 if !d.limitsTrustworthy && d.limits_age_s >= 0 {
-                    // The stale number stays visible, but labelled. Hiding it
-                    // would be worse: you would not know it exists.
-                    Text("cache from \(shortAge(d.limits_age_s))")
+                    // The stale number stays visible, but labelled — and the
+                    // label names its SOURCE. "cache from 1d" and "live ·
+                    // 40min" are both old, and they are not the same problem:
+                    // the first says Claude Code stopped refreshing, the
+                    // second says nothing has been spent in a while.
+                    Text(d.limitsLive ? "live · \(shortAge(d.limits_age_s))"
+                                      : "cache from \(shortAge(d.limits_age_s))")
                         .font(.system(size: 9, weight: .medium))
                         .foregroundStyle(Palette.severity("warning"))
                 }

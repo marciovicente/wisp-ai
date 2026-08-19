@@ -1,7 +1,9 @@
 """
-Reads the Claude subscription usage limits from Claude Code's local cache.
+Reads the Claude subscription usage limits, and keeps the best reading we have.
 
-Source: ~/.claude.json -> cachedUsageUtilization
+Two sources: Claude Code's own cache (~/.claude.json -> cachedUsageUtilization)
+and the live reading the menu bar app fetches from Anthropic, which lands here
+through the bridge and is kept in ~/.wisp/limits.json.
 
 This is the same data the /usage panel draws. Claude Code fetches it from the
 server and stores it here; we only read. There is no computation of ours — you
@@ -23,6 +25,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 CONFIG = Path.home() / ".claude.json"
+
+# Where the LIVE reading is kept — the one the menu bar app fetches straight
+# from Anthropic with its own keychain access.
+#
+# On disk, not only in the bridge's memory, because the bridge dies far more
+# often than the number goes stale: every app relaunch restarts it. Until this
+# existed, a restart threw away a reading from a minute ago in order to show
+# the fallback underneath — Claude Code's own cache, measured here at 43h old,
+# with every window already past its reset.
+LIVE = Path.home() / ".wisp" / "limits.json"
 
 # kind -> short label (the screen is 480px; a long name does not fit)
 LABELS = {
@@ -57,6 +69,15 @@ def _fmt_reset(iso: str | None, now: datetime) -> str:
     return f"{secs / 86400:.0f}d"
 
 
+# Last parse of ~/.claude.json, keyed by (mtime, size).
+#
+# The file is 80 KB and every /state from the board — every 600ms — goes
+# through here to compare its freshness against the live reading. Parsing 80 KB
+# of JSON twice a second to discover that nothing changed is work nobody asked
+# for. A stat is enough to find out.
+_memo = [None]   # [(key, cached)] — a single slot, swapped atomically
+
+
 def read() -> dict:
     """
     Returns:
@@ -72,22 +93,67 @@ def read() -> dict:
     or {"ok": False, "reason": "..."} — it never raises, because this runs
     inside the bridge loop and broken stats must not take the status down.
     """
-    if not CONFIG.exists():
+    try:
+        st = CONFIG.stat()
+    except OSError:
         return {"ok": False, "reason": "~/.claude.json does not exist"}
 
-    try:
-        with CONFIG.open(errors="replace") as fh:
-            cfg = json.load(fh)
-    except (OSError, json.JSONDecodeError) as exc:
-        return {"ok": False, "reason": f"could not read the config: {exc}"}
+    key = (st.st_mtime_ns, st.st_size)
+    seen = _memo[0]
+    if seen and seen[0] == key:
+        cached = seen[1]
+    else:
+        try:
+            with CONFIG.open(errors="replace") as fh:
+                cfg = json.load(fh)
+        except (OSError, json.JSONDecodeError) as exc:
+            return {"ok": False, "reason": f"could not read the config: {exc}"}
+        cached = cfg.get("cachedUsageUtilization")
+        # Memoised even when absent: a file with nothing to offer should not be
+        # re-parsed 100 times a minute to say so again. One assignment, because
+        # the server is threaded — key and value have to become visible together.
+        _memo[0] = (key, cached)
 
-    cached = cfg.get("cachedUsageUtilization")
     if not cached:
         return {"ok": False, "reason": "no cachedUsageUtilization (run /usage once)"}
 
     now = datetime.now(timezone.utc)
-    age_s = max(0, (now.timestamp() * 1000 - cached.get("fetchedAtMs", 0)) / 1000)
-    return normalize(cached.get("utilization"), int(age_s))
+    fetched_ms = cached.get("fetchedAtMs", 0)
+    age_s = max(0, (now.timestamp() * 1000 - fetched_ms) / 1000)
+    r = normalize(cached.get("utilization"), int(age_s))
+    # The ABSOLUTE instant, not just the age: whoever chooses between this and
+    # the live reading has to compare two clocks, and an age is only comparable
+    # to another age measured at the same moment.
+    r["fetched_at"] = fetched_ms / 1000
+    return r
+
+
+def save_live(utilization: dict, when: float) -> None:
+    """Records the live reading so a bridge restart does not lose it."""
+    try:
+        LIVE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = LIVE.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"fetched_at": when, "utilization": utilization}))
+        # Atomic swap: the bridge reads this file at boot, and a half-written
+        # one would be a crash on startup, the worst possible moment.
+        tmp.replace(LIVE)
+    except OSError:
+        pass  # a cache we cannot write is never a reason to take the bridge down
+
+
+def load_live() -> tuple:
+    """(utilization, fetched_at) from the last live reading, or (None, 0)."""
+    try:
+        d = json.loads(LIVE.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None, 0.0
+    u = d.get("utilization")
+    if not isinstance(u, dict):
+        return None, 0.0
+    try:
+        return u, float(d.get("fetched_at") or 0)
+    except (TypeError, ValueError):
+        return None, 0.0
 
 
 def normalize(utilization, age_s: int) -> dict:

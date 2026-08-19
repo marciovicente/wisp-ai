@@ -272,7 +272,14 @@ final class Bridge: ObservableObject {
 
     /// Decides whether it is time to ask. Called on every /app poll, which
     /// already runs every 2 seconds — it needs no timer of its own.
-    private func maybeFetchLimits(done: Int?) async {
+    ///
+    /// `expired` is a window whose reset has already gone by. It is the third
+    /// trigger and the only one that fires with the machine idle: a rolled-over
+    /// percentage is not stale, it is WRONG — after the reset the real usage
+    /// drops, so what is on screen alarms you over a period that no longer
+    /// exists. Waiting up to an hour to correct that was the visible half of
+    /// this bug.
+    private func maybeFetchLimits(done: Int?, expired: Bool) async {
         guard fetchLimits, state.alive else { return }
         let now = Date()
 
@@ -288,8 +295,11 @@ final class Bridge: ObservableObject {
             await fetchNow()                          // first time
             return
         }
+        // The floor comes first and applies to every trigger: it is the only
+        // thing standing between a fast iteration and a self-inflicted 429.
         let since = now.timeIntervalSince(last)
-        if since >= Self.limitsCeiling || (donePending && since >= Self.limitsFloor) {
+        guard since >= Self.limitsFloor else { return }
+        if since >= Self.limitsCeiling || donePending || expired {
             await fetchNow()
         }
     }
@@ -333,7 +343,8 @@ final class Bridge: ObservableObject {
             let (raw, _) = try await URLSession.shared.data(for: req)
             data = try JSONDecoder().decode(AppState.self, from: raw)
             pollError = nil
-            await maybeFetchLimits(done: data?.tasks_done)
+            await maybeFetchLimits(done: data?.tasks_done,
+                                   expired: data?.limits.contains { $0.expired } ?? false)
         } catch {
             pollError = error.localizedDescription
         }

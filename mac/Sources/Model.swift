@@ -83,6 +83,9 @@ struct AppState: Decodable {
     let sessions: [Session]
     let limits: [Limit]
     let limits_age_s: Int      // -1 = unavailable
+    /// "live" = the app read it from Anthropic; "cache" = Claude Code's
+    /// on-disk copy. Optional so an older bridge still decodes.
+    let limits_source: String?
     let peak: Int              // -1 = unavailable
     let usage: Usage
     /// true = the bridge answers anyone on the local network. It exists only
@@ -120,10 +123,22 @@ struct AppState: Decodable {
     /// warning. On the cable it does not warn: it is already fixing itself.
     var batteryLow: Bool { (batteryPct ?? 100) <= 20 && !batteryCharging }
 
-    /// The limits cache should be at most 5 min old (Claude Code's own TTL).
-    /// Past that the number on screen is fiction and has to appear with its
-    /// age next to it.
-    var limitsTrustworthy: Bool { limits_age_s >= 0 && limits_age_s < 300 }
+    /// Read straight from Anthropic, not from Claude Code's cache.
+    var limitsLive: Bool { limits_source == "live" }
+
+    /// How long the number is worth showing without a caveat beside it.
+    ///
+    /// It depends on WHERE it came from, and the two sources are not
+    /// comparable. A live reading was exact at the moment of the fetch and
+    /// only drifts by what you spend afterwards — half an hour of it is still
+    /// a good number. Claude Code's cache carries its own 5-minute TTL and,
+    /// worse, is only rewritten when something else provokes a fetch: measured
+    /// two days frozen. Judging both by the same 5 minutes labelled a fresh
+    /// live reading as suspect and let a two-day-old cache look the same as a
+    /// six-minute-old one.
+    var limitsTrustworthy: Bool {
+        limits_age_s >= 0 && limits_age_s < (limitsLive ? 1800 : 300)
+    }
 }
 
 /// Formats a big number without clutter: 251502 -> "251K", 3378109531 -> "3.4B".

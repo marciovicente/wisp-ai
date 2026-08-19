@@ -193,8 +193,12 @@ class State:
         # Limits fetched LIVE by the menu bar app, which has its own keychain
         # access. Takes precedence over Claude Code's on-disk cache, which is
         # only rewritten when something triggers a fetch — seen stuck 3 days.
-        self.live_limits = None
-        self.live_limits_at = 0.0
+        #
+        # Loaded from disk on boot, on purpose: restarting the bridge is not a
+        # reason to forget a reading. The app restarts the bridge whenever it
+        # is relaunched, and starting empty meant falling straight back to a
+        # two-day-old cache showing windows that had already reset.
+        self.live_limits, self.live_limits_at = limits.load_live()
         self.limits_error = ""
         # Who was the last NON-local client to fetch /state, and when. That is
         # how we know the board is alive: it is the only thing fetching from
@@ -384,31 +388,41 @@ class State:
 
         return snap
 
-    # Past this the live data stops counting and we fall back to the cache.
-    # 10 min is twice the TTL Claude Code itself uses (5 min); if the app
-    # stopped fetching, showing the cache with its age beats a frozen number.
-    LIVE_VALID_S = 600
-
     def subscription_limits(self) -> dict:
         """
-        Subscription limits, from the best source available.
+        Subscription limits, from whichever source read them MOST RECENTLY.
 
-        Order: whatever the app fetched live, otherwise Claude Code's on-disk
+        There are two: what the app fetched live, and Claude Code's on-disk
         cache. The app can only fetch because it has its own keychain access,
         through the macOS API and with your consent — the bridge never sees the
         credential, which is why it can still run on its own in a terminal.
+
+        The rule used to be a deadline: past 10 minutes the live reading
+        "stopped counting" and we fell back to the cache. It was the wrong
+        rule, and it is what produced the bug this replaces. The app only
+        refreshes every 10 min while you are spending and up to an hour when
+        you are not, so the live reading expired BEFORE it was renewed — and
+        what took its place was Claude Code's cache, which had been sitting
+        untouched for 43 hours with every window past its reset. The panel
+        spent most of the day showing "cache from 1d" and a frozen 52%.
+
+        A deadline answers the wrong question. What matters is not whether a
+        reading is old, it is whether anything KNOWS BETTER. Between two
+        readings the newer one wins, and its age is reported so nobody has to
+        take it on faith. A live reading half an hour old only misses what you
+        spent in that half hour; the cache underneath misses two days.
         """
         with self.lock:
             live, fetched = self.live_limits, self.live_limits_at
-        if live and time.time() - fetched < self.LIVE_VALID_S:
-            r = limits.normalize(live, int(time.time() - fetched))
-            if r.get("ok"):
+        cache = limits.read()
+        if live:
+            r = limits.normalize(live, int(max(0, time.time() - fetched)))
+            if r.get("ok") and fetched >= cache.get("fetched_at", 0):
                 r["source"] = "live"
                 return r
-        r = limits.read()
-        if r.get("ok"):
-            r["source"] = "cache"
-        return r
+        if cache.get("ok"):
+            cache["source"] = "cache"
+        return cache
 
     def refresh_usage(self) -> None:
         """Recomputes today's usage in the background."""
@@ -594,15 +608,22 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, json.JSONDecodeError):
                 self._send(400, {"error": "json"})
                 return
+            now = time.time()
             with STATE.lock:
                 if "error" in payload:
                     # App failure: we keep the reason and do NOT touch the last
-                    # good data, which may still be within its deadline.
+                    # good reading, which is still the best one we have.
                     STATE.limits_error = str(payload["error"])[:200]
+                    fresh = False
                 else:
                     STATE.live_limits = payload
-                    STATE.live_limits_at = time.time()
+                    STATE.live_limits_at = now
                     STATE.limits_error = ""
+                    fresh = True
+            # Outside the lock: this writes a file, and the /state the board is
+            # polling every 600ms takes the same lock.
+            if fresh:
+                limits.save_live(payload, now)
             self._send(200, {"ok": True})
             return
 

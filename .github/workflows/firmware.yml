@@ -24,12 +24,20 @@ jobs:
 
       # The version matters: Waveshare's BSP declares idf >=5.5 and does not
       # build on 5.4. Pinned here for the same reason it is pinned in the README.
+      #
+      # pypng is installed before the build because esp_mmap_assets converts the
+      # mascot PNGs with its own LVGLImage.py, which imports png. The IDF image
+      # does not ship it — a local machine usually has it from some earlier
+      # install, which is why this only ever broke here. It goes in with pip,
+      # inside the container, because that IDF environment is the interpreter
+      # the build actually calls.
       - name: build with ESP-IDF 5.5
         uses: espressif/esp-idf-ci-action@v1
         with:
           esp_idf_version: v5.5
           target: esp32s3
           path: firmware
+          command: pip install pypng && idf.py build
 
       - name: package
         run: |

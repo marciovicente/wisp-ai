@@ -79,6 +79,13 @@ bool pmic_read_reg(uint8_t reg, uint8_t *value)
     return s_axp && value && read_reg(reg, value);
 }
 
+bool pmic_write_reg(uint8_t reg, uint8_t value)
+{
+    if (!s_axp) return false;
+    const uint8_t buf[2] = {reg, value};
+    return i2c_master_transmit(s_axp, buf, sizeof(buf), 200) == ESP_OK;
+}
+
 bool pmic_read(int *pct, bool *charging)
 {
     if (!s_axp) return false;

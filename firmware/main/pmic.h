@@ -27,6 +27,13 @@ bool pmic_read(int *pct, bool *charging);
  * a GPIO. False = I2C failed or the PMIC did not come up. */
 bool pmic_read_reg(uint8_t reg, uint8_t *value);
 
+/* Raw write of one register. Needed by the same feature that made read_reg
+ * exist: the power button is an interrupt bit, and interrupt bits have to be
+ * enabled once and acknowledged after every read — the AXP2101 clears them by
+ * WRITING ONE to the bit, so a read alone would report the same press forever.
+ * False = I2C failed or the PMIC did not come up. */
+bool pmic_write_reg(uint8_t reg, uint8_t value);
+
 #ifdef __cplusplus
 }
 #endif

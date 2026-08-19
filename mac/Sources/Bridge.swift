@@ -110,6 +110,10 @@ final class Bridge: ObservableObject {
     /// hour later.
     private var donePending = false
     private var lastLimitsFetch: Date?
+    /// A fetch already under way. Without this, a keychain waiting on a dialog
+    /// gets a SECOND request on top ten minutes later — and each one is another
+    /// dialog. One question at a time.
+    private var fetching = false
     /// Backoff survives a relaunch, on purpose.
     ///
     /// It used to live only in memory, and that defeated it: every launch
@@ -305,9 +309,12 @@ final class Bridge: ObservableObject {
     }
 
     private func fetchNow() async {
+        guard !fetching else { return }
+        fetching = true
         donePending = false
         lastLimitsFetch = Date()
         await updateLimits()
+        fetching = false
     }
 
     private func startPolling() {

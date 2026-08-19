@@ -35,6 +35,9 @@ enum Limits {
     enum Failure: Error, Equatable {
         case noCredential(OSStatus)   // includes the "you declined" case
         case noToken
+        /// The keychain neither allowed nor refused: it is waiting for an
+        /// answer that never came.
+        case keychainStuck
         /// The status and, when the server sends it, Retry-After in seconds.
         /// We keep the value because a 429 without a backoff becomes a
         /// permanent 429.
@@ -55,6 +58,8 @@ enum Limits {
                 return "keychain refused (status \(s))"
             case .noToken:
                 return "credential has no access token"
+            case .keychainStuck:
+                return "keychain did not answer — is there a dialog waiting?"
             case .expired(let at):
                 let f = DateFormatter()
                 f.dateFormat = "dd/MM HH:mm"
@@ -153,9 +158,31 @@ enum Limits {
         // Called from the main actor, that freezes the entire interface while
         // the window waits — and the panel locks up at exactly the moment it
         // needs to explain what is going on.
-        let t = try await Task.detached(priority: .userInitiated) {
-            try token()
-        }.value
+        let work = Task.detached(priority: .userInitiated) { try token() }
+
+        // With a DEADLINE, because the wait can be infinite.
+        //
+        // SecItemCopyMatching only returns after you answer the dialog, and
+        // nobody is obliged to be at the machine when it appears — after every
+        // rebuild it does, since an ad-hoc signature makes the app a different
+        // app to macOS and the earlier "Always Allow" stops counting. Waiting
+        // forever is the worst of the failures available: no data, no error,
+        // and a panel showing an old number as if nothing had happened. That is
+        // how a stale reading becomes invisible.
+        //
+        // The deadline does not cancel the read — a blocking C call is not
+        // interruptible — it stops US from waiting on it. The dialog stays up,
+        // and if you authorize it later the next fetch goes straight through.
+        let t = try await withThrowingTaskGroup(of: String.self) { group in
+            group.addTask { try await work.value }
+            group.addTask {
+                try await Task.sleep(nanoseconds: 25_000_000_000)
+                throw Failure.keychainStuck
+            }
+            defer { group.cancelAll() }
+            guard let first = try await group.next() else { throw Failure.noToken }
+            return first
+        }
 
         var req = URLRequest(url: endpoint)
         req.httpMethod = "GET"

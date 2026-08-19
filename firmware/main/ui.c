@@ -31,13 +31,17 @@ static const char *TAG = "ui";
  *  aqui: a RAM interna e o recurso mais escasso desta placa, e ja chegou a
  *  4,7KB de minimo historico.
  *
- *  O componente desta versao NAO gera o cabecalho mmap_generate_*.h, entao
- *  `checksum` e `files` saem lidos do proprio binario (offsets 0x10 e 0x0C do
- *  cabecalho de 32 bytes) e os assets sao acessados por indice, em ordem
- *  alfabetica.
- * ———————————————————————————————————————————————— */
+ *  Os assets sao acessados por INDICE, em ordem alfabetica — ver IDX abaixo.
+ *
+ *  SOBRE O CHECKSUM, que ja custou tempo a duas pessoas: nao passamos nenhum, e
+ *  isso e deliberado. Este componente gera um `mmap_generate_storage.h` com o
+ *  valor certo, mas quando o binario comeca com o magic "MMAP" — o formato atual
+ *  — ele usa o checksum do PROPRIO cabecalho e IGNORA o que vem na config
+ *  (esp_mmap_assets.c: `stored_chksum = header.checksum`; a config so entra no
+ *  fallback do formato legado). Havia um 23455 fixo aqui que nao validava nada e
+ *  contradizia o header gerado depois que a arte mudou: numero magico inerte
+ *  parece verificacao e nao e. Zero diz a verdade — quem valida e o binario. */
 #define ASSETS_QTD      8
-#define ASSETS_CHECKSUM 23455
 
 /* Ordem alfabetica dos arquivos na particao, mapeada para os nossos estados. */
 static const int IDX[WISP_COUNT] = {
@@ -65,7 +69,7 @@ static void carregar_fotos(void)
     const mmap_assets_config_t cfg = {
         .partition_label = "storage",
         .max_files = ASSETS_QTD,
-        .checksum = ASSETS_CHECKSUM,
+        .checksum = 0,        /* ver a nota acima: o binario e quem manda */
         .flags = {.mmap_enable = true},
     };
     if (mmap_assets_new(&cfg, &s_assets) != ESP_OK) {
@@ -239,7 +243,24 @@ static lv_obj_t *g_telas[2];
 #define QTD_TELAS ((int) (sizeof(g_telas) / sizeof(g_telas[0])))
 static lv_obj_t *g_bar_rotulo[MAX_BARRAS], *g_bar_pct[MAX_BARRAS];
 static lv_obj_t *g_bar[MAX_BARRAS], *g_bar_reset[MAX_BARRAS];
+static lv_obj_t *g_card[MAX_BARRAS];
 static lv_obj_t *g_frescor;
+
+/* —— medidas do painel de limites ——
+ * Cada limite e um cartao: porcentagem grande a esquerda, pilula com o nome a
+ * direita, barra grossa e o reset embaixo. Os numeros fecham para caber QUATRO
+ * cartoes na tela: 4*88 + 3*8 de respiro = 376, dentro dos 378 que sobram
+ * entre o titulo e o rodape. */
+#define CARD_X    24
+#define CARD_L    432
+#define CARD_A    96
+#define CARD_GAP  24    /* respiro entre cartoes; cai para CARD_GAP_MIN com quatro */
+#define CARD_GAP_MIN 8
+#define CARD_PAD  14
+#define BARRA_A   14    /* era 8: a barra e o que se le de longe */
+#define PAINEL_Y0 46    /* primeira linha util, logo abaixo do titulo */
+#define PAINEL_Y1 440   /* ultima linha util com rodape na tela */
+#define PAINEL_Y1_CHEIO 466  /* ate onde vai quando o rodape sai de cena */
 
 static uint32_t g_refrescos, g_ultima_medida;
 
@@ -364,7 +385,25 @@ typedef struct { int16_t d, x, y; const lv_font_t *f_det, *f_proj; } vaga_t;
 static void vaga_de(int total, int i, vaga_t *v)
 {
     if (total <= 1) {
+#if CONFIG_IDF_TARGET_ESP32C6
+        /* 306 = os 236 da S3 mais 30%, e a arte da pasta assets_c6 tem
+         * exatamente esse tamanho — o objeto da foto recebe v.d como tamanho,
+         * e imagem maior que o objeto sai CORTADA, nao reduzida. Os dois numeros
+         * andam juntos: mexer em um sem o outro corta o mascote ou deixa moldura
+         * vazia em volta dele.
+         *
+         * Sobe para y=-50 (era -12) porque a lista de sessoes abaixo do rotulo
+         * cresceu: com o mascote centrado, a quarta linha cairia fora da tela.
+         *
+         * A conta vertical fecha justa e por isso esta escrita: mascote de 306
+         * centrado em 190 ocupa 37..343, o detalhe fica em 369 e a lista comeca
+         * em 395 — quatro linhas de 19 terminam em 471, com 9px de sobra. Os
+         * 37px de folga no topo sao deliberados: a moldura come a beirada do
+         * vidro, mais ainda nos cantos arredondados. */
+        *v = (vaga_t){306, 0, -50, &lv_font_montserrat_32, &lv_font_montserrat_20};
+#else
         *v = (vaga_t){236, 0, -12, &lv_font_montserrat_32, &lv_font_montserrat_20};
+#endif
     } else if (total == 2) {
         *v = (vaga_t){178, (i == 0 ? -118 : 118), -10,
                       &lv_font_montserrat_24, &lv_font_montserrat_16};
@@ -457,9 +496,27 @@ static void aplicar_layout(int total)
         }
 
         lv_obj_set_style_text_font(m->detail, v.f_det, 0);
-        lv_obj_set_style_text_font(m->project, v.f_proj, 0);
         lv_obj_align(m->detail, LV_ALIGN_CENTER, v.x, v.y + v.d / 2 + 26);
+#if CONFIG_IDF_TARGET_ESP32C6
+        /* O rotulo de projeto virou LISTA: uma linha por sessao, ate quatro.
+         *
+         * Ancorada pelo TOPO, nao pelo centro. Com LV_ALIGN_CENTER um label que
+         * cresce se abre para os dois lados, e a primeira linha sobe ate
+         * encostar no detalhe. Do topo, a lista cresce para baixo, que e onde
+         * sobra espaco.
+         *
+         * A fonte comeca em 24 e quem manda nela e a QUANTIDADE de sessoes, no
+         * update — ver a nota lá. Aqui fica o caso de uma sessao, que e o comum. */
+        lv_obj_set_style_text_font(m->project, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_align(m->project, LV_TEXT_ALIGN_CENTER, 0);
+        /* line_space -1 comprime as linhas de 20 para 19px. Parece detalhe e e
+         * o que garante a quarta linha dentro da tela. */
+        lv_obj_set_style_text_line_space(m->project, -1, 0);
+        lv_obj_align(m->project, LV_ALIGN_TOP_MID, v.x, 240 + v.y + v.d / 2 + 52);
+#else
+        lv_obj_set_style_text_font(m->project, v.f_proj, 0);
         lv_obj_align(m->project, LV_ALIGN_CENTER, v.x, v.y + v.d / 2 + 54);
+#endif
 
         m->p_alt = -1;   /* força reposicionar os olhos na nova escala */
     }
@@ -729,49 +786,133 @@ static void animar(lv_timer_t *t)
 /* ————————————————————————————————————————————————
  *  Construção
  * ———————————————————————————————————————————————— */
+/* Cor pela FAIXA de uso, nao pelo campo `severity` do bridge.
+ *
+ * Cinco faixas de 20 pontos, percorrendo o espectro de frio para quente. A
+ * leitura pretendida e periferica: da para saber onde se esta sem ler o numero,
+ * e a passagem de amarelo para laranja marca a metade da segunda metade — o
+ * ponto em que ainda da tempo de mudar de plano.
+ *
+ * O `severity` continua chegando do bridge e nao decide cor aqui. Quem diz qual
+ * limite esta VALENDO e o campo `active`, e essa e outra pergunta — respondida
+ * pela pilula acesa, nao pela cor da barra. */
+static lv_color_t cor_do_pct(int pct)
+{
+    if (pct > 80) return lv_color_make(226,  74,  62);   /* vermelho        81-100 */
+    if (pct > 60) return lv_color_make(240, 146,  58);   /* laranja          61-80 */
+    if (pct > 40) return lv_color_make(238, 206,  70);   /* amarelo          41-60 */
+    if (pct > 20) return lv_color_make(166, 214,  86);   /* verde-amarelado  21-40 */
+    return lv_color_make(76, 200, 176);                  /* verde-azulado     0-20 */
+}
+
+/* Empilha os cartoes CENTRADOS no espaco util.
+ *
+ * Chamado quando a quantidade de limites muda, e nao a cada consulta: com tres
+ * limites (o caso comum — sessao de 5h, semana, semana Fable) um bloco ancorado
+ * no topo deixaria um vazio grande sobre o rodape. Centrar custa uma conta.
+ *
+ * COM QUATRO LIMITES A CONTA NAO FECHA com o respiro cheio, e a saida esta
+ * escrita aqui em vez de escondida num numero: o respiro cai para 8px e o
+ * rodape de frescor sai de cena para o quarto cartao entrar. Some a informacao
+ * menos urgente da tela (ha quanto tempo os numeros foram lidos) em favor de
+ * nao esconder um limite inteiro. Quatro cartoes de 96 mais tres de 8 dao 408,
+ * dentro dos 420 que sobram sem o rodape. */
+static void posicionar_cards(int quantos)
+{
+    if (quantos < 1) quantos = 1;
+    if (quantos > MAX_BARRAS) quantos = MAX_BARRAS;
+
+    const bool apertado = (quantos >= MAX_BARRAS);
+    const int gap = apertado ? CARD_GAP_MIN : CARD_GAP;
+    const int y1  = apertado ? PAINEL_Y1_CHEIO : PAINEL_Y1;
+
+    if (g_frescor) {
+        if (apertado) lv_obj_add_flag(g_frescor, LV_OBJ_FLAG_HIDDEN);
+        else          lv_obj_remove_flag(g_frescor, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    const int alt = quantos * CARD_A + (quantos - 1) * gap;
+    int y = PAINEL_Y0 + ((y1 - PAINEL_Y0) - alt) / 2;
+    if (y < PAINEL_Y0) y = PAINEL_Y0;
+    for (int i = 0; i < MAX_BARRAS; i++) {
+        lv_obj_align(g_card[i], LV_ALIGN_TOP_LEFT, CARD_X, y + i * (CARD_A + gap));
+    }
+}
+
 static void criar_painel(lv_obj_t *pai)
 {
     lv_obj_t *titulo = lv_label_create(pai);
     lv_label_set_text(titulo, "USAGE LIMITS");
     lv_obj_set_style_text_font(titulo, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(titulo, lv_color_make(120, 128, 140), 0);
-    lv_obj_align(titulo, LV_ALIGN_TOP_LEFT, 34, 44);
+    lv_obj_set_style_text_color(titulo, lv_color_make(150, 158, 172), 0);
+    lv_obj_align(titulo, LV_ALIGN_TOP_MID, 0, 16);
 
     for (int i = 0; i < MAX_BARRAS; i++) {
-        const int y = 90 + i * 78;
+        /* O CARTAO.
+         *
+         * lv_obj_create nasce com fundo, borda e padding do tema, e com rolagem
+         * propria — tudo zerado aqui. O so_decoracao e o que mantem o DESLIZE
+         * funcionando: sem o EVENT_BUBBLE o cartao engole o arrasto e o
+         * tileview nunca recebe o gesto, porque os cartoes cobrem justamente a
+         * faixa da tela onde o dedo passa. */
+        lv_obj_t *card = lv_obj_create(pai);
+        lv_obj_set_size(card, CARD_L, CARD_A);
+        lv_obj_set_style_bg_color(card, lv_color_make(24, 24, 30), 0);
+        lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+        lv_obj_set_style_radius(card, 16, 0);
+        lv_obj_set_style_border_width(card, 0, 0);
+        lv_obj_set_style_pad_all(card, 0, 0);
+        lv_obj_set_scrollbar_mode(card, LV_SCROLLBAR_MODE_OFF);
+        so_decoracao(card);
+        g_card[i] = card;
 
-        g_bar_rotulo[i] = lv_label_create(pai);
-        lv_obj_set_style_text_font(g_bar_rotulo[i], &lv_font_montserrat_24, 0);
-        lv_obj_set_style_text_color(g_bar_rotulo[i], lv_color_make(200, 206, 214), 0);
-        lv_obj_align(g_bar_rotulo[i], LV_ALIGN_TOP_LEFT, 34, y);
-        lv_label_set_text(g_bar_rotulo[i], "");
-
-        g_bar_pct[i] = lv_label_create(pai);
-        lv_obj_set_style_text_font(g_bar_pct[i], &lv_font_montserrat_38, 0);
-        lv_obj_align(g_bar_pct[i], LV_ALIGN_TOP_RIGHT, -34, y - 2);
+        /* Porcentagem: o maior elemento do cartao, no canto de leitura. */
+        g_bar_pct[i] = lv_label_create(card);
+        lv_obj_set_style_text_font(g_bar_pct[i], &lv_font_montserrat_32, 0);
+        lv_obj_set_style_text_color(g_bar_pct[i], lv_color_make(238, 242, 248), 0);
+        lv_obj_align(g_bar_pct[i], LV_ALIGN_TOP_LEFT, CARD_PAD, 4);
         lv_label_set_text(g_bar_pct[i], "");
+        so_decoracao(g_bar_pct[i]);
 
-        g_bar[i] = lv_bar_create(pai);
-        lv_obj_set_size(g_bar[i], 412, 8);
-        lv_obj_align(g_bar[i], LV_ALIGN_TOP_LEFT, 34, y + 26);
+        /* Nome do limite como PILULA: fundo no proprio label, com padding e
+         * raio. Um container separado daria o mesmo desenho e um objeto a mais
+         * por cartao — e objeto a mais aqui e area a mais para redesenhar. */
+        g_bar_rotulo[i] = lv_label_create(card);
+        lv_obj_set_style_text_font(g_bar_rotulo[i], &lv_font_montserrat_16, 0);
+        lv_obj_set_style_text_color(g_bar_rotulo[i], lv_color_make(228, 232, 240), 0);
+        lv_obj_set_style_bg_color(g_bar_rotulo[i], lv_color_make(86, 78, 128), 0);
+        lv_obj_set_style_bg_opa(g_bar_rotulo[i], LV_OPA_COVER, 0);
+        lv_obj_set_style_radius(g_bar_rotulo[i], LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_pad_hor(g_bar_rotulo[i], 12, 0);
+        lv_obj_set_style_pad_ver(g_bar_rotulo[i], 5, 0);
+        lv_obj_align(g_bar_rotulo[i], LV_ALIGN_TOP_RIGHT, -CARD_PAD, 14);
+        lv_label_set_text(g_bar_rotulo[i], "");
+        so_decoracao(g_bar_rotulo[i]);
+
+        g_bar[i] = lv_bar_create(card);
+        lv_obj_set_size(g_bar[i], CARD_L - 2 * CARD_PAD, BARRA_A);
+        lv_obj_align(g_bar[i], LV_ALIGN_TOP_LEFT, CARD_PAD, 46);
         lv_bar_set_range(g_bar[i], 0, 100);
-        lv_obj_set_style_bg_color(g_bar[i], lv_color_make(38, 44, 54), 0);
-        lv_obj_set_style_radius(g_bar[i], 4, 0);
-        lv_obj_set_style_radius(g_bar[i], 4, LV_PART_INDICATOR);
+        lv_obj_set_style_bg_color(g_bar[i], lv_color_make(62, 56, 88), 0);
+        lv_obj_set_style_radius(g_bar[i], BARRA_A / 2, 0);
+        lv_obj_set_style_radius(g_bar[i], BARRA_A / 2, LV_PART_INDICATOR);
         so_decoracao(g_bar[i]);
 
-        g_bar_reset[i] = lv_label_create(pai);
+        g_bar_reset[i] = lv_label_create(card);
         lv_obj_set_style_text_font(g_bar_reset[i], &lv_font_montserrat_20, 0);
-        lv_obj_set_style_text_color(g_bar_reset[i], lv_color_make(120, 128, 140), 0);
-        lv_obj_align(g_bar_reset[i], LV_ALIGN_TOP_LEFT, 34, y + 40);
+        lv_obj_set_style_text_color(g_bar_reset[i], lv_color_make(140, 150, 164), 0);
+        lv_obj_align(g_bar_reset[i], LV_ALIGN_TOP_LEFT, CARD_PAD, 66);
         lv_label_set_text(g_bar_reset[i], "");
+        so_decoracao(g_bar_reset[i]);
     }
-
+    /* Antes do posicionar_cards, que decide se ele aparece. */
     g_frescor = lv_label_create(pai);
-    lv_obj_set_style_text_font(g_frescor, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(g_frescor, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(g_frescor, lv_color_make(120, 128, 140), 0);
-    lv_obj_align(g_frescor, LV_ALIGN_BOTTOM_MID, 0, -40);
+    lv_obj_align(g_frescor, LV_ALIGN_BOTTOM_MID, 0, -14);
     lv_label_set_text(g_frescor, "");
+
+    posicionar_cards(MAX_BARRAS);
 }
 
 static void criar_mascote(lv_obj_t *pai, mascote_t *m)
@@ -1211,6 +1352,72 @@ void ui_update(const wisp_data_t *d)
                 snprintf(m->ult_detalhe, sizeof(m->ult_detalhe), "%s", txt);
                 lv_label_set_text(m->detail, txt);
             }
+#if CONFIG_IDF_TARGET_ESP32C6
+            /* TODAS as sessoes, uma por linha, em vez de "projeto  +N".
+             *
+             * O "+N" dizia QUANTAS outras existiam e nunca QUAIS — e saber
+             * quais e justamente o que se quer de longe, quando ha varios
+             * projetos abertos ao mesmo tempo. O mascote continua sendo um so
+             * (ver a decisao logo acima): a lista nao divide a tela, ela nomeia
+             * o que esta rodando.
+             *
+             * O "> " marca a sessao que o mascote esta representando — a mais
+             * urgente pelo critere de URGENCIA. Sem a marca, ver quatro nomes e
+             * uma cara so deixa a pergunta "a cara e de qual deles?".
+             *
+             * ASCII puro no marcador porque as Montserrat embutidas no LVGL
+             * cobrem so ASCII: um "›" bonito sairia como quadrado vazio. */
+            char lista[200];
+            lista[0] = '\0';
+            int usado = 0;
+            int mostrar = d->session_count;
+            if (mostrar > WISP_MAX_SESSIONS) mostrar = WISP_MAX_SESSIONS;
+            for (int k = 0; k < mostrar; k++) {
+                int w = snprintf(lista + usado, sizeof(lista) - usado, "%s%s%.24s",
+                                 k ? "\n" : "", k == esc ? "> " : "  ",
+                                 d->sessions[k].project);
+                if (w < 0) break;
+                usado += w;
+                if (usado >= (int) sizeof(lista) - 1) { usado = sizeof(lista) - 1; break; }
+            }
+            /* Mais sessoes do que caberia na lista: o resto volta a ser contagem.
+             * Nao e o caso comum — WISP_MAX_SESSIONS e 4 e o bridge raramente
+             * passa disso —, mas silenciar as excedentes seria mentir sobre o
+             * que esta rodando. */
+            if (d->session_count > mostrar && usado < (int) sizeof(lista) - 1) {
+                snprintf(lista + usado, sizeof(lista) - usado, "\n  +%d",
+                         d->session_count - mostrar);
+            }
+            /* FONTE PELA QUANTIDADE DE LINHAS, e a conta e o motivo.
+             *
+             * Com o mascote em 306px a lista comeca em y=395 e tem 75px ate a
+             * borda util. No montserrat_24 uma linha mede 28px: cabem duas.
+             * Tres ou quatro linhas nessa fonte sairiam da tela ou entrariam por
+             * baixo da moldura — e some justamente o nome que se quis ler.
+             *
+             * Entao: 24 ate duas sessoes (o caso comum, e o tamanho pedido), 16
+             * de tres em diante, onde quatro linhas de 19px fecham em 471. A
+             * alternativa seria cortar a lista com um "+N", e ai a fonte grande
+             * custaria a informacao — trocar o tamanho e o menor dos dois males.
+             *
+             * A troca invalida a tela inteira porque mudar de fonte muda a
+             * ALTURA do label: em modo parcial num AMOLED, a area que ele
+             * deixa de ocupar continua acesa com o texto velho. */
+            static int ult_linhas = -1;
+            if (mostrar != ult_linhas) {
+                ult_linhas = mostrar;
+                lv_obj_set_style_text_font(m->project,
+                    mostrar <= 2 ? &lv_font_montserrat_24 : &lv_font_montserrat_16, 0);
+                lv_obj_invalidate(lv_screen_active());
+            }
+
+            static char ult_lista[200];
+            if (strcmp(lista, ult_lista) != 0) {
+                snprintf(ult_lista, sizeof(ult_lista), "%s", lista);
+                lv_label_set_text(m->project, lista);
+            }
+            (void) outras;
+#else
             /* %.19s: o limite tem que ser EXPLICITO. Sem a precisao, o gcc
              * so ve dois campos de tamanho aberto indo para o mesmo buffer e
              * recusa com format-truncation, que aqui e erro. */
@@ -1221,6 +1428,7 @@ void ui_update(const wisp_data_t *d)
                 snprintf(m->ult_projeto, sizeof(m->ult_projeto), "%s", pj);
                 lv_label_set_text(m->project, pj);
             }
+#endif
         }
     } else {
         char tmp[36];
@@ -1272,36 +1480,62 @@ void ui_update(const wisp_data_t *d)
     }
     assinatura = assinatura * 31u + (uint32_t)(d->limits_age_s / 60);
 
+    /* PRIMEIRA VEZ EXPLICITA, e nao "ult_assinatura = 0".
+     *
+     * A assinatura de "nenhum limite" vale exatamente zero: com limit_count 0
+     * o laco acima nao roda, e limits_age_s = -1 dividido por 60 trunca para 0
+     * em C. Partindo ult_assinatura de 0, o primeiro update era descartado por
+     * parecer repeticao — e o painel ficava como nasceu, quatro barras vazias
+     * sem texto nenhum, nem o "limits unavailable" que existe para explicar o
+     * vazio. Num aparelho sem WiFi provisionado isso nunca se desfaz, porque
+     * nunca chega um estado com limites de verdade para mudar a assinatura.
+     *
+     * Sentinela em vez de valor impossivel porque nao existe valor impossivel:
+     * a hash pode dar qualquer uint32. */
+    static bool primeiro_update = true;
     static uint32_t ult_assinatura = 0;
-    if (assinatura != ult_assinatura) {
+    if (primeiro_update || assinatura != ult_assinatura) {
+        primeiro_update = false;
         ult_assinatura = assinatura;
+
+        /* Quantidade de limites mudou: reposiciona a pilha e limpa a tela.
+         *
+         * O invalidate nao e zelo. Em modo PARCIAL num AMOLED, esconder objeto
+         * nao apaga pixel — apenas marca a area como suja para alguem
+         * redesenhar. Cartao que sai de cena, ou que se move, deixa o desenho
+         * antigo ACESO no lugar, indistinguivel de conteudo valido. E a mesma
+         * armadilha que a troca de arranjo dos mascotes documenta. */
+        static int ult_quantos = -1;
+        if (d->limit_count != ult_quantos) {
+            ult_quantos = d->limit_count;
+            posicionar_cards(d->limit_count);
+            lv_obj_invalidate(g_tile_painel);
+        }
 
         for (int i = 0; i < MAX_BARRAS; i++) {
             if (i >= d->limit_count) {
-                lv_label_set_text(g_bar_rotulo[i], "");
-                lv_label_set_text(g_bar_pct[i], "");
-                lv_label_set_text(g_bar_reset[i], "");
-                lv_obj_add_flag(g_bar[i], LV_OBJ_FLAG_HIDDEN);
+                lv_obj_add_flag(g_card[i], LV_OBJ_FLAG_HIDDEN);
                 continue;
             }
             const wisp_limit_t *b = &d->limits[i];
-            lv_obj_remove_flag(g_bar[i], LV_OBJ_FLAG_HIDDEN);
-
-            lv_color_t cor = lv_color_make(95, 207, 142);
-            if (!strcmp(b->severity, "warning"))  cor = lv_color_make(232, 193, 90);
-            if (!strcmp(b->severity, "critical")) cor = lv_color_make(232,  98, 74);
+            lv_obj_remove_flag(g_card[i], LV_OBJ_FLAG_HIDDEN);
 
             char tmp[40];
-            lv_label_set_text(g_bar_rotulo[i], b->label);
-            lv_obj_set_style_text_color(g_bar_rotulo[i],
-                b->active ? lv_color_make(232, 238, 246) : lv_color_make(140, 150, 164), 0);
-
             snprintf(tmp, sizeof(tmp), "%d%%", b->pct);
             lv_label_set_text(g_bar_pct[i], tmp);
-            lv_obj_set_style_text_color(g_bar_pct[i], cor, 0);
+
+            lv_label_set_text(g_bar_rotulo[i], b->label);
+            /* Pilula ACESA no limite que esta valendo, apagada nos outros.
+             * A cor da barra diz "quanto ja gastei"; a pilula acesa diz "e este
+             * que vai te parar primeiro". Duas perguntas, dois canais — juntar
+             * as duas na mesma cor perderia uma delas. */
+            lv_obj_set_style_bg_color(g_bar_rotulo[i],
+                b->active ? lv_color_make(96, 86, 146) : lv_color_make(52, 50, 66), 0);
+            lv_obj_set_style_text_color(g_bar_rotulo[i],
+                b->active ? lv_color_make(236, 238, 246) : lv_color_make(150, 156, 170), 0);
 
             lv_bar_set_value(g_bar[i], b->pct, LV_ANIM_OFF);
-            lv_obj_set_style_bg_color(g_bar[i], cor, LV_PART_INDICATOR);
+            lv_obj_set_style_bg_color(g_bar[i], cor_do_pct(b->pct), LV_PART_INDICATOR);
 
             if (b->resets_in[0]) {
                 snprintf(tmp, sizeof(tmp), "resets in %s", b->resets_in);

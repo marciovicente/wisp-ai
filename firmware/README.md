@@ -1,4 +1,4 @@
-# Firmware — Waveshare ESP32-S3-Touch-AMOLED-2.16
+# Firmware — Waveshare ESP32-S3-Touch-AMOLED-2.16 (and the C6 sister board)
 
 The board is optional. The menu bar app works on its own; this is for putting
 the mascot on a little screen on your desk.
@@ -28,8 +28,16 @@ not build on 5.4.
 
 ```bash
 git clone -b v5.5 --recursive https://github.com/espressif/esp-idf.git ~/esp/esp-idf
-~/esp/esp-idf/install.sh esp32s3
+~/esp/esp-idf/install.sh esp32s3      # esp32c6 for the C6 board
 source ~/esp/esp-idf/export.sh
+```
+
+The asset generator imports `pypng` from inside IDF's own venv, and it is not
+part of IDF's requirements. Without it the build stops at "Build assets binary"
+with `ModuleNotFoundError: No module named 'png'`:
+
+```bash
+~/.espressif/python_env/idf5.5_py3.9_env/bin/python -m pip install pypng
 ```
 
 ## Before flashing: keep the factory firmware
@@ -109,3 +117,72 @@ or FULL render mode, and we run PARTIAL because of the item above — it only
 logged a warning and rotated nothing. Rotation uses the panel's MADCTL
 instead, which costs zero CPU. Touch has to rotate with it, or taps land in
 the wrong place.
+
+
+## The C6 board
+
+There is a sister board — **ESP32-C6-Touch-AMOLED-2.16** — with the same
+panel, touch, IMU and PMIC, but a different MCU. This firmware builds for it
+too:
+
+```bash
+idf.py set-target esp32c6
+idf.py build
+```
+
+`./flash.sh` picks the chip up from the build's own `flasher_args.json`, so
+flashing is the same command. What it will NOT do is download a release: the
+published binary is Xtensa and the C6 is RISC-V, so on that board you build
+locally or you get nothing.
+
+### What differs, and why it is not just a recompile
+
+**No PSRAM.** The C6 has no interface for it. 512KB of SRAM is all there is,
+shared by WiFi, lwIP, the LVGL buffer and the SPI DMA. That inverts one
+decision: on the S3 the LVGL buffer could live in PSRAM and every flush paid
+for a bounce buffer in internal RAM, which is what pushed `ALTURA_BUFFER` down
+to 4 lines. Here the buffer is already where DMA reads, so it is 40 lines
+(38KB, against 127KB of internal RAM free with the display up) and 12 flushes
+per frame instead of 120.
+
+**No BSP.** `waveshare/esp32_s3_touch_amoled_2_16` declares
+`targets: [esp32s3]` and has no C6 counterpart in the registry.
+`components/bsp_c6_amoled_216` reimplements the nine symbols this firmware
+actually uses — same names, same signatures — so `main.c` and `ui.c` compile
+unchanged. It registers itself empty on any other target, and the S3 BSP is
+gated behind `rules: if target == esp32s3`, so an S3 build is byte-for-byte
+what it was.
+
+**The panel has no reset pin and no backlight pin.** Power for the AMOLED is
+the AXP2101's ALDO3 rail, and "resetting the panel" means cycling it. Skip that
+and the screen stays black with the firmware happily running — the classic
+symptom of a bad port on this board.
+
+**Less flash-mapping address space.** `esp_mmap_assets` maps the whole
+partition and checks `spi_flash_mmap_get_free_pages()` first. The 7MB
+`storage` partition fails that check on the C6; the firmware survives (it falls
+back to the vector mascot) but the artwork never shows up. `partitions.esp32c6.csv`
+uses 2MB, which the 1.3MB of mascots fit into with room to spare.
+
+**Use `esp_lcd_co5300`, not `esp_lcd_sh8601`.** Waveshare's own C6 example uses
+the sh8601 driver, and it works — but it answers `ESP_ERR_NOT_SUPPORTED` to
+`swap_xy`, and the accelerometer rotation here is built on
+`esp_lcd_panel_swap_xy()` + `mirror()`. With co5300 the S3's init table works
+byte for byte, MADCTL base `0xA0` included — which matters, because
+`aplicar_rotacao()` is calibrated against exactly that value.
+
+**Two `#if` in main.c beyond the buffer**: the LVGL task stack cannot ask for
+PSRAM, and the buttons move to GPIO 9 (BOOT) and 18 (KEY). GPIO 0, the left
+button on the S3, is the display's QSPI clock on the C6 — configuring it as an
+input would fight the panel.
+
+### Editing sdkconfig
+
+`sdkconfig.defaults` holds what both boards share; `sdkconfig.defaults.esp32s3`
+and `sdkconfig.defaults.esp32c6` hold the rest. ESP-IDF applies the pair
+automatically. The split is not cosmetic: `CONFIG_SPIRAM` and the
+`ESP32S3_*_CACHE` options do not exist in the C6's Kconfig at all.
+
+If you edit any of those files after the first build, **delete `sdkconfig`** —
+IDF does not reapply defaults over an existing one, and the change looks like
+it was ignored.

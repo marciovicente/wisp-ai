@@ -1,0 +1,25 @@
+# Wisp — ESP32-C6-Touch-AMOLED-2.16 only.
+#
+# WHAT THE C6 CHANGES
+# -------------------
+# Single-core RISC-V at 160MHz, 512KB of SRAM and NO PSRAM — the chip has no
+# interface for it. So none of the S3's SPIRAM_* options appear here; they do
+# not exist in this target's Kconfig, and every allocation that used to land in
+# PSRAM now competes for the same 512KB as the WiFi stack and the display's DMA
+# buffer.
+#
+# That is why the network tuning in sdkconfig.defaults (AMPDU off, small RX/TX
+# buffer counts, 2880-byte TCP windows) matters even more here than it did on
+# the S3: there is no second pool to fall back to.
+
+# 160MHz is the C6's maximum, and it is also the default. Spelled out so that
+# the board's clock is a decision in the file and not an inherited default.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_160=y
+
+# The mascots are RGB565A8 RAW bitmaps read straight from the mmap'd storage
+# partition, so nothing is decoded at boot and no PNG scratch buffer is needed
+# — which is what makes 236x236 artwork viable on a board with 512KB.
+
+# Tabela de partições própria: a partição de assets tem de caber no espaço de
+# MMU deste chip. Ver o cabeçalho de partitions.esp32c6.csv.
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.esp32c6.csv"

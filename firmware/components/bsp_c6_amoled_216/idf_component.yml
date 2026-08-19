@@ -1,0 +1,30 @@
+## Dependências do BSP do C6.
+##
+## As regras `if: target == esp32c6` existem para que um build para a placa S3
+## não baixe nada disto — lá o BSP oficial já traz os mesmos drivers.
+dependencies:
+  idf:
+    version: ">=5.5"
+  espressif/esp_lcd_co5300:
+    version: "^2.1.0"
+    rules:
+      - if: "target == esp32c6"
+  waveshare/esp_lcd_touch_cst9217:
+    version: "*"
+    rules:
+      - if: "target == esp32c6"
+  espressif/esp_lcd_touch:
+    version: "^1.1"
+    public: true
+    rules:
+      - if: "target == esp32c6"
+  espressif/esp_lvgl_adapter:
+    version: "~0.6"
+    public: true
+    rules:
+      - if: "target == esp32c6"
+  lvgl/lvgl:
+    version: ">=8,<10"
+    public: true
+    rules:
+      - if: "target == esp32c6"

@@ -1,39 +1,19 @@
-# Wisp — ESP32-S3-Touch-AMOLED-2.16
+# Wisp — options shared by every board.
 #
-# Base: sdkconfig.defaults from Waveshare's official example (02_lvgl_demo_v9),
-# with the LVGL demos removed (they only bloat the binary) and what the network
-# needs added.
+# Anything that only exists on one chip lives in sdkconfig.defaults.<target>,
+# which ESP-IDF applies on top of this file automatically. That split is not
+# cosmetic: CONFIG_SPIRAM does not exist in the C6's Kconfig at all, and the
+# ESP32S3_*_CACHE options do not either.
 #
-# The three values below are NOT guesses — they were checked against silicon:
-#   FLASHMODE_QIO   <- the chip's eFuse says "quad (4 data lines)"
+# Checked against silicon on both boards:
+#   FLASHMODE_QIO   <- the eFuse says "quad (4 data lines)"
 #   FLASHSIZE_16MB  <- esptool detected 16MB (device 0x4018)
-#   SPIRAM_MODE_OCT <- the ESP32-S3R8 carries octal PSRAM; getting this wrong
-#                      is a boot loop
 CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
 
-CONFIG_SPIRAM=y
-CONFIG_SPIRAM_MODE_OCT=y
-CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y
-CONFIG_SPIRAM_RODATA=y
-CONFIG_SPIRAM_SPEED_80M=y
-CONFIG_SPIRAM_XIP_FROM_PSRAM=y
-
-CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
-CONFIG_ESP32S3_DATA_CACHE_64KB=y
-CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
-CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
-
 CONFIG_FREERTOS_HZ=1000
-
-# —— Memory: WiFi vs. the display's DMA ——
-# The CO5300's SPI driver needs a DMA buffer in INTERNAL RAM. With the
-# WiFi+lwIP stack allocating there too, internal runs out and the panel stops
-# updating with "Failed to allocate priv TX buffer" / ESP_ERR_NO_MEM.
-# Pushing the network buffers into PSRAM gives internal back to the display.
-CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 
 # Measured: TRY_ALLOCATE above alone left 16KB of internal free (minimum
 # 7.8KB), not enough for the panel's DMA. The rest of the savings come from
@@ -52,14 +32,6 @@ CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=8
 # lwIP: smaller TCP windows. Also trading throughput for RAM, same reasoning.
 CONFIG_LWIP_TCP_SND_BUF_DEFAULT=2880
 CONFIG_LWIP_TCP_WND_DEFAULT=2880
-
-# TRIED AND REVERTED: touching SPIRAM_MALLOC_RESERVE_INTERNAL /
-# ALWAYSINTERNAL made it worse (free internal at boot dropped from 26KB to
-# 7.7KB). The cause was not allocation policy: SPI allocates a bounce buffer
-# the SIZE OF THE FLUSH whenever the area's length is not cache-aligned. With
-# buffer_height=50 that asks for up to 48KB contiguous. The fix is to lower the
-# flush ceiling — done in main.c, registering the display with a smaller
-# buffer.
 
 # —— LVGL ——
 CONFIG_LV_USE_CLIB_MALLOC=y

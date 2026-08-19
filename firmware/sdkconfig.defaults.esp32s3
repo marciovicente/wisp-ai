@@ -1,0 +1,32 @@
+# Wisp — ESP32-S3-Touch-AMOLED-2.16 only.
+#
+# SPIRAM_MODE_OCT <- the ESP32-S3R8 carries octal PSRAM; getting this wrong
+#                    is a boot loop.
+
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y
+CONFIG_SPIRAM_RODATA=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_XIP_FROM_PSRAM=y
+
+CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
+CONFIG_ESP32S3_DATA_CACHE_64KB=y
+CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+# —— Memory: WiFi vs. the display's DMA ——
+# The CO5300's SPI driver needs a DMA buffer in INTERNAL RAM. With the
+# WiFi+lwIP stack allocating there too, internal runs out and the panel stops
+# updating with "Failed to allocate priv TX buffer" / ESP_ERR_NO_MEM.
+# Pushing the network buffers into PSRAM gives internal back to the display.
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+
+# TRIED AND REVERTED: touching SPIRAM_MALLOC_RESERVE_INTERNAL /
+# ALWAYSINTERNAL made it worse (free internal at boot dropped from 26KB to
+# 7.7KB). The cause was not allocation policy: SPI allocates a bounce buffer
+# the SIZE OF THE FLUSH whenever the area's length is not cache-aligned. With
+# buffer_height=50 that asks for up to 48KB contiguous. The fix is to lower the
+# flush ceiling — done in main.c, registering the display with a smaller
+# buffer.
+

@@ -1,0 +1,16 @@
+# Name,   Type, SubType, Offset,  Size, Flags
+# Tabela do C6. A da placa S3 (partitions.csv) reserva 8M de app e 7M de
+# assets; aqui os dois números precisaram mudar, e o segundo não por gosto:
+#
+# O esp_mmap_assets mapeia a PARTIÇÃO INTEIRA e antes disso confere se há
+# espaço livre de MMU para ela (spi_flash_mmap_get_free_pages). O C6 tem menos
+# espaço de endereçamento de flash que o S3, e com 7M a checagem falhava:
+#   E mmap_assets: The free size is less than storage partition required
+# O firmware não morre — cai no mascote vetorial — mas as artes nunca aparecem.
+#
+# Os 8 mascotes RGB565A8 somam 1,3M. 2M dá folga de 50% e passa com sobra na
+# conta de MMU. O app de fato mede 2M; 6M é a mesma folga generosa do S3.
+nvs,      data, nvs,     0x9000,  0x6000,
+phy_init, data, phy,     0xf000,  0x1000,
+factory,  app,  factory, ,        6M,
+storage,  data, spiffs,  ,        3M,

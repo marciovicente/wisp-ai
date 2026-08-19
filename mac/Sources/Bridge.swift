@@ -184,9 +184,19 @@ final class Bridge: ObservableObject {
         env["WISP_PARENT"] = "\(ProcessInfo.processInfo.processIdentifier)"
         p.environment = env
 
+        // The strong binding before the Task is not a style choice.
+        //
+        // A weak reference is a VAR — it can be zeroed at any moment — and
+        // reading one from inside concurrently-executing code is an error on
+        // Swift 5.10, which is what the CI runner compiles with. Swift 6 reads
+        // the same lines and says nothing, so this broke for everyone cloning
+        // with an older Xcode while building fine on the machine it was
+        // written on.
         p.terminationHandler = { [weak self] finished in
+            guard let self else { return }
+            let status = finished.terminationStatus
             Task { @MainActor in
-                self?.processDied(status: finished.terminationStatus)
+                self.processDied(status: status)
             }
         }
 
@@ -323,7 +333,8 @@ final class Bridge: ObservableObject {
         // 2s: the panel is only visible while open, and nothing here changes
         // fast enough to justify more.
         let t = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in await self?.poll() }
+            guard let self else { return }
+            Task { @MainActor in await self.poll() }
         }
         RunLoop.main.add(t, forMode: .common)
         timer = t

@@ -12,22 +12,9 @@ project(wisp)
 # RGB565A8: 565 colour with a separate alpha channel — the name LVGL 9 uses,
 # and the only alpha format that works here, because the characters have their
 # background cut out.
-# Arte 30% maior no C6 (306x306 contra 236x236).
-#
-# Escalar em tempo de execucao com lv_image_set_scale() seria uma linha, e sai
-# caro no lugar errado: o C6 e single-core e a animacao ja e o gargalo desta
-# placa. Reamostrar no build custa flash — 2,1MB de RAW contra 1,3MB, e por
-# isso a particao de assets do C6 tem 3MB — e nao custa nada por quadro.
-#
-# A pasta original fica intacta para a placa S3.
-set(WISP_ASSETS "${CMAKE_CURRENT_SOURCE_DIR}/assets")
-if("${IDF_TARGET}" STREQUAL "esp32c6")
-    set(WISP_ASSETS "${CMAKE_CURRENT_SOURCE_DIR}/assets_c6")
-endif()
-
 spiffs_create_partition_assets(
     storage
-    "${WISP_ASSETS}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets"
     FLASH_IN_PROJECT
     MMAP_FILE_SUPPORT_FORMAT ".png"
     MMAP_SUPPORT_RAW 1

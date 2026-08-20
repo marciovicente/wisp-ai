@@ -31,6 +31,7 @@
 #include "bsp/touch.h"
 #include "esp_lv_adapter.h"
 #include "qmi8658.h"
+#include "board.h"
 #include "pmic.h"
 #include "ui.h"
 
@@ -96,30 +97,23 @@ static bool s_bat_carregando = false;
  * hora um pouco mais lento nao se percebe.
  *
  * Trocar velocidade que ninguem ve por estabilidade que todo mundo ve. */
-#if CONFIG_IDF_TARGET_ESP32C6
-/* 40 linhas no C6, e a inversão em relação ao S3 tem motivo.
+/* Quantas linhas o buffer do LVGL cobre por flush. O valor vem da PLACA
+ * (BOARD_LVGL_LINHAS, em board.h) e a diferenca entre as duas e grande — 4 na
+ * S3, 40 na C6 — por um motivo que parece invertido e nao e:
  *
- * A pressão que empurrou o S3 de 16 para 8 e depois para 4 linhas era a
- * disputa por RAM INTERNA: lá o buffer do LVGL podia nascer na PSRAM, e então
- * cada flush pagava um buffer de rebote em RAM interna, alocado na hora, que
- * falhava sob fragmentação.
+ * na S3 o buffer pode nascer na PSRAM, e ai cada flush paga um buffer de rebote
+ * em RAM INTERNA alocado na hora; sob fragmentacao essa alocacao falha, e flush
+ * que falha deixa o pixel velho na tela. Baixar o teto foi o que resolveu.
+ * Na C6 nao existe PSRAM: o buffer ja nasce onde o DMA le, sem rebote, e o que
+ * conta e o oposto — poucas linhas significam muitos flushes num single-core.
  *
- * No C6 não existe PSRAM — o buffer já nasce onde o DMA lê, e não há rebote
- * por causa de PSRAM. Medido com o display de pé: 162KB de RAM interna livres.
- *
- * E errar para baixo custa caro aqui: com 4 linhas são 120 flushes por quadro
- * num single-core de 160MHz. Com 40 o buffer sobe para 480*40*2 = 38KB — ainda
- * pequeno diante dos 162KB — e caem para 12 flushes por quadro.
- *
- * MEDIDO ATÉ AGORA: os 38KB não faltaram (127KB internos livres depois de
- * subir, contra 162KB com 4 linhas) e nenhum flush falhou. O ganho de FPS
- * ainda NÃO foi medido: sem sessão ativa a UI entra em repouso e para de
- * animar, então o contador marca 0 nas duas configurações e não compara nada.
- * A medição honesta é com o bridge servindo estado. */
-#define ALTURA_BUFFER 40
-#else
-#define ALTURA_BUFFER 4
-#endif
+ * TENTADO E REVERTIDO na S3: expandir para largura cheia (x1=0, x2=479) na
+ * teoria eliminaria o rebote, porque len = 960*altura e 960 e multiplo de 64. Na
+ * pratica o rebote continuou sendo alocado (o desalinhamento devia estar no
+ * ENDERECO, nao no comprimento) e cada piscada passou a redesenhar uma faixa de
+ * 480px: FPS caiu de 66 para 8-26. Teoria bonita, medicao contraria — fica o
+ * registro para nao tentarmos de novo. */
+#define ALTURA_BUFFER BOARD_LVGL_LINHAS
 
 /* O CO5300 exige áreas com início par e fim ímpar. Idêntico ao rounder do BSP.
  *
@@ -148,14 +142,10 @@ static lv_display_t *iniciar_display(void)
          * faz o toque cair no lugar errado da tela. */
         .touch_flags = {.swap_xy = 1, .mirror_x = 0, .mirror_y = 1},
     };
-    /* A pilha da task do LVGL também sai da RAM interna. */
-#if CONFIG_IDF_TARGET_ESP32C6
-    /* O C6 não tem PSRAM — nem interface para ela. Pedir a pilha lá faria o
-     * adapter falhar na criação da task, e o display nunca subiria. */
-    cfg.lv_adapter_cfg.stack_in_psram = false;
-#else
-    cfg.lv_adapter_cfg.stack_in_psram = true;
-#endif
+    /* A pilha da task do LVGL tambem sai da RAM interna quando nao ha PSRAM.
+     * Pedir PSRAM numa placa que nao tem faz o adapter falhar na criacao da
+     * task, e o display nunca sobe. */
+    cfg.lv_adapter_cfg.stack_in_psram = BOARD_TEM_PSRAM;
 
     if (esp_lv_adapter_init(&cfg.lv_adapter_cfg) != ESP_OK) return NULL;
 
@@ -275,28 +265,18 @@ static void aplicar_rotacao(int graus)
         case 270: swap = true;  mx = true;  my = false; break;  /* 0x60 */
         default:  swap = false; mx = true;  my = true;  break;  /* 0xC0 */
     }
-#if CONFIG_IDF_TARGET_ESP32C6
-    /* MEIA VOLTA A MAIS NESTA PLACA, nas quatro posições.
+    /* Meia volta a mais quando o modulo do painel esta montado virado
+     * (BOARD_PAINEL_MEIA_VOLTA). 180 graus no MADCTL e inverter os DOIS bits de
+     * espelho e deixar o MV quieto: girar meia volta e espelhar em X e em Y ao
+     * mesmo tempo. No ciclo que o comentario acima descreve isso e andar dois
+     * passos — e e por isso que nao da para consertar trocando entradas da
+     * tabela entre si: as quatro precisam do mesmo deslocamento.
      *
-     * A tabela acima está ancorada no MADCTL 0xA0 que a sequência de init
-     * escreve, e essa ancoragem foi calibrada na S3. Na C6 o painel é o mesmo
-     * CO5300 com a mesma tabela, mas o módulo está montado meia volta virado:
-     * com a rotação já escolhendo o lado certo, as quatro posições apareciam
-     * de cabeça para baixo — todas, e pelo mesmo tanto.
-     *
-     * 180 graus no MADCTL é inverter os DOIS bits de espelho e deixar o MV
-     * quieto: girar meia volta é espelhar em X e em Y ao mesmo tempo. No ciclo
-     * que o comentário acima descreve (0x00 -> 0x60 -> 0xC0 -> 0xA0) isso é
-     * andar dois passos, e é por isso que não dá para consertar trocando
-     * entradas da tabela entre si — as quatro precisam do mesmo deslocamento.
-     *
-     * Fica aqui e não na tabela para a S3 continuar exatamente como estava:
-     * quem muda é a placa, não a matéria do MADCTL. O touch acompanha porque
-     * recebe a mesma tripla logo abaixo — sem isso o dedo cairia no ponto
-     * oposto do conteúdo. */
-    mx = !mx;
-    my = !my;
-#endif
+     * O touch acompanha porque recebe a mesma tripla logo abaixo. */
+    if (BOARD_PAINEL_MEIA_VOLTA) {
+        mx = !mx;
+        my = !my;
+    }
 
     esp_lcd_panel_swap_xy(s_painel, swap);
     esp_lcd_panel_mirror(s_painel, mx, my);
@@ -342,52 +322,33 @@ static bool iniciar_imu(void)
     return true;
 }
 
-#if CONFIG_IDF_TARGET_ESP32C6
-/* Botoes na C6: os tres, e o do meio nao e um GPIO.
+/* Botoes: brilho da tela.
  *
- * BOOT (GPIO9, esquerda) e KEY (GPIO18, direita) sao GPIO. O do meio e o PWR,
- * ligado ao pino PWRON do AXP2101 — ele chega como BIT DE INTERRUPCAO no PMIC,
- * e nao existe GPIO nenhum para ler. Era por isso que ele nunca respondia
- * enquanto os botoes eram lidos so por GPIO: nao havia o que ler.
- *
- *   esquerda (BOOT) -> abaixa o brilho
- *   meio     (PWR)  -> apaga a tela; o toque seguinte acende de volta
- *   direita  (KEY)  -> aumenta o brilho
+ *   esquerda -> abaixa   |   meio -> apaga e acende   |   direita -> aumenta
  *
  * TRES NIVEIS, nao uma rampa: 30, 60 e 100%. Brilho continuo pediria pressao
- * longa e algum indicador na tela para dizer onde se esta; com tres passos cada
+ * longa e algum indicador na tela dizendo onde se esta; com tres passos cada
  * toque tem efeito visivel e o estado e obvio de olhar.
  *
  * A troca de tela sai dos botoes e fica so no deslize, que e o gesto que o
  * tileview ja faz.
  *
- * ATENCAO ao PWR: segurar ~4s nao chega neste codigo — o PMIC desliga a placa
- * por hardware, e um toque curto religa. Isso e do chip.
+ * QUAIS pinos, e como se le o do meio, e assunto da placa (board.h) — o resto
+ * daqui e igual nas duas:
+ *   - na S3 os tres sao GPIO, e o do meio tem polaridade INVERTIDA em relacao
+ *     as pontas: ele repousa em 0 e sobe ao ser apertado;
+ *   - na C6 o do meio e o PWR, ligado ao pino PWRON do AXP2101, e chega como
+ *     BIT DE INTERRUPCAO no PMIC — nao existe GPIO para ler. Era por isso que
+ *     ele nao respondia enquanto os botoes eram lidos so por GPIO.
  *
- * POLARIDADE: os dois de GPIO repousam em 1 e vao a 0 quando apertados. GPIO9 e
- * tambem o pino de BOOT: usar em tempo de execucao e seguro (so e amostrado no
- * reset), mas segura-lo ENQUANTO a placa liga entra em modo de gravacao.
- *
- * O KEY E O GPIO10, e isso foi MEDIDO — nao lido de documentacao.
- *
- * A documentacao desta placa (a nossa e a que se acha por aí) coloca o KEY no
- * GPIO18, e no GPIO18 nao ha botao nenhum: o pino simplesmente nao se move. O
- * sintoma era o pior possivel para diagnosticar, porque "o botao nao faz nada"
- * e exatamente o que um pedido de brilho no extremo tambem produz — foi o que
- * me fez perseguir a hipotese errada primeiro.
- *
- * Achado como o autor achou os da S3: todos os pinos livres em entrada com
- * pull-up, e ver qual desce sob o dedo. O GPIO10 desceu nas quatro vezes,
- * limpo, com o GPIO9 servindo de controle na mesma captura. */
-#define BOTAO_MENOS  GPIO_NUM_9    /* BOOT, esquerda */
-#define BOTAO_MAIS   GPIO_NUM_10   /* KEY, direita — MEDIDO, ver abaixo */
-#define BOTAO_ATIVO  0
+ * ATENCAO ao PWR da C6: segurar ~4s nao chega neste codigo — o PMIC desliga a
+ * placa por hardware, e um toque curto religa. Isso e do chip. */
 
 /* AXP2101: mascara do "toque curto no PWRON".
  *
  * PKEY_SHORT e o bit 11 da lista de IRQs do chip, e essa lista mora em tres
  * registradores de 8 bits — o bit 11 cai no segundo deles, posicao 3. Daqui
- * saem os dois enderecos: habilitar em INTEN2 e ler/limpar em INTSTS2.
+ * saem os dois enderecos: habilitar em INTEN2, ler e limpar em INTSTS2.
  *
  * Os bits de status limpam ESCREVENDO UM neles. Sem esse passo o mesmo toque
  * seria lido para sempre, e a tela piscaria a 25 vezes por segundo. */
@@ -402,11 +363,11 @@ static bool s_apagada = false;
 
 /* O MUTEX DO LVGL TAMBEM VALE PARA O BRILHO.
  *
- * Brilho aqui e uma escrita no registrador 0x51 do painel, pelo mesmo
- * barramento QSPI que a task do LVGL usa para despejar pixels. Duas tasks
- * mandando no mesmo esp_lcd_panel_io ao mesmo tempo embaralham a fila de
- * transacoes. O exemplo oficial da Waveshare pega o lock do LVGL antes de
- * mexer no brilho, e por este motivo. */
+ * Brilho e uma escrita no registrador 0x51 do painel, pelo mesmo barramento
+ * QSPI que a task do LVGL usa para despejar pixels. Duas tasks mandando no
+ * mesmo esp_lcd_panel_io ao mesmo tempo embaralham a fila de transacoes. O
+ * exemplo oficial da Waveshare pega o lock do LVGL antes de mexer no brilho, e
+ * e por este motivo. */
 static void aplicar_brilho(void)
 {
     const int pct = s_apagada ? 0 : NIVEIS_BRILHO[s_nivel];
@@ -441,25 +402,49 @@ static void brilho_passo(int passo)
     aplicar_brilho();
 }
 
+/* True uma vez por toque no botao do meio. As duas placas leem de lugares
+ * diferentes; quem chama nao precisa saber de qual. */
+static bool meio_apertado(void)
+{
+#if BOARD_BTN_MEIO_VIA_PMIC
+    uint8_t sts = 0;
+    if (pmic_read_reg(AXP_INTSTS2, &sts) && (sts & AXP_PKEY_SHORT)) {
+        pmic_write_reg(AXP_INTSTS2, AXP_PKEY_SHORT);   /* escreve 1 para limpar */
+        return true;
+    }
+    return false;
+#else
+    static int anterior = !BOARD_BTN_MEIO_ATIVO;
+    const int nivel = gpio_get_level(BOARD_BTN_MEIO);
+    const bool borda = (nivel == BOARD_BTN_MEIO_ATIVO && anterior != BOARD_BTN_MEIO_ATIVO);
+    anterior = nivel;
+    return borda;
+#endif
+}
+
+static void entrada_em_pull_up(gpio_num_t pino)
+{
+    gpio_config_t c = {
+        .pin_bit_mask = 1ULL << pino,
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&c);
+}
+
 static void tarefa_botoes(void *arg)
 {
     (void) arg;
-    const gpio_num_t pinos[2] = {BOTAO_MENOS, BOTAO_MAIS};
+    const gpio_num_t pinos[2] = {BOARD_BTN_BAIXO, BOARD_BTN_ALTO};
     const int passo[2] = {-1, +1};
-    int anterior[2] = {!BOTAO_ATIVO, !BOTAO_ATIVO};
+    int anterior[2] = {!BOARD_BTN_ATIVO, !BOARD_BTN_ATIVO};
 
-    for (int i = 0; i < 2; i++) {
-        gpio_config_t c = {
-            .pin_bit_mask = 1ULL << pinos[i],
-            .mode = GPIO_MODE_INPUT,
-            .pull_up_en = GPIO_PULLUP_ENABLE,
-            .pull_down_en = GPIO_PULLDOWN_DISABLE,
-            .intr_type = GPIO_INTR_DISABLE,
-        };
-        gpio_config(&c);
-    }
+    for (int i = 0; i < 2; i++) entrada_em_pull_up(pinos[i]);
 
-    /* PWR: habilita o IRQ de toque curto e descarta o que estiver pendente.
+#if BOARD_BTN_MEIO_VIA_PMIC
+    /* Habilita o IRQ de toque curto e descarta o que estiver pendente.
      *
      * A limpeza no arranque nao e detalhe: ligar a placa E um toque no PWR, e
      * sem isso o primeiro passo do laco leria esse toque e apagaria a tela logo
@@ -469,97 +454,36 @@ static void tarefa_botoes(void *arg)
         pmic_write_reg(AXP_INTEN2, reg | AXP_PKEY_SHORT);
         pmic_write_reg(AXP_INTSTS2, AXP_PKEY_SHORT);
     } else {
-        ESP_LOGW(TAG, "PMIC nao respondeu — botao do meio (PWR) sem funcao");
+        ESP_LOGW(TAG, "PMIC nao respondeu — botao do meio sem funcao");
     }
+#else
+    entrada_em_pull_up(BOARD_BTN_MEIO);
+#endif
+
+    ESP_LOGI(TAG, "botoes prontos em %s", BOARD_NOME);
 
     while (1) {
         for (int i = 0; i < 2; i++) {
-            int nivel = gpio_get_level(pinos[i]);
-            /* Loga TODA transicao, nao so a que age. E o que separa "o pino nao
-             * e este botao" de "o botao foi lido e o pedido nao tinha efeito" —
-             * duas causas com o mesmo sintoma na mesa. */
-            if (nivel != anterior[i]) {
-                ESP_LOGI(TAG, "botao %s: nivel %d",
-                         i == 0 ? "esquerda/BOOT(GPIO9)" : "direita/KEY(GPIO18)", nivel);
-            }
-            /* Age na BORDA de descida, nao no nivel: senao segurar o botao
-             * viraria uma enxurrada de mudancas a 25 por segundo. */
-            if (nivel == BOTAO_ATIVO && anterior[i] != BOTAO_ATIVO) {
+            const int nivel = gpio_get_level(pinos[i]);
+            /* Age na BORDA, nao no nivel: senao segurar o botao viraria uma
+             * enxurrada de mudancas a 25 por segundo. */
+            if (nivel == BOARD_BTN_ATIVO && anterior[i] != BOARD_BTN_ATIVO) {
                 brilho_passo(passo[i]);
             }
             anterior[i] = nivel;
         }
 
-        uint8_t sts = 0;
-        if (pmic_read_reg(AXP_INTSTS2, &sts) && (sts & AXP_PKEY_SHORT)) {
-            pmic_write_reg(AXP_INTSTS2, AXP_PKEY_SHORT);   /* escreve 1 para limpar */
+        if (meio_apertado()) {
             s_apagada = !s_apagada;
             aplicar_brilho();
         }
 
         /* 40ms: acima da trepidacao mecanica do contato e bem abaixo do que um
-         * dedo percebe como atraso. Vale tambem para o PMIC — a leitura I2C de
-         * um registrador a 25Hz e barata. */
+         * dedo percebe como atraso. Vale tambem para o PMIC — ler um registrador
+         * por I2C a 25Hz e barato. */
         vTaskDelay(pdMS_TO_TICKS(40));
     }
 }
-#else
-/* Botoes fisicos: passar de tela sem tocar no vidro.
- *
- * Os pinos foram MEDIDOS, nao supostos — o BSP declara BSP_CAPS_BUTTONS 0 e
- * nao documenta nenhum. Uma varredura dos GPIO livres com os tres apertados
- * em ordem deu: esquerdo GPIO0, meio GPIO16, direito GPIO18.
- *
- * O do meio fica de fora por enquanto: as pontas ja significam "para o lado",
- * que e o gesto que o tileview faz. O do meio quer dizer outra coisa, e usar
- * antes de saber o que seria escolher por ele.
- *
- * POLARIDADE DIFERENTE, e por isso ela e explicita aqui: as pontas repousam
- * em 1 e vao a 0 quando apertadas; o do meio repousa em 0. Assumir "botao e
- * ativo em nivel baixo" funcionaria para os dois que usamos e quebraria no
- * terceiro, no dia em que alguem o ligasse.
- *
- * GPIO0 e tambem o pino de BOOT. Usa-lo em tempo de execucao e seguro — ele
- * so e amostrado no reset —, mas segurar o botao esquerdo ENQUANTO a placa
- * liga entra em modo de gravacao em vez de subir o firmware. */
-#define BOTAO_ESQ  GPIO_NUM_0
-#define BOTAO_DIR  GPIO_NUM_18
-#define BOTAO_ATIVO 0        /* nivel logico dos dois das pontas quando apertados */
-
-static void tarefa_botoes(void *arg)
-{
-    (void) arg;
-    const gpio_num_t pinos[2] = {BOTAO_ESQ, BOTAO_DIR};
-    const int direcao[2] = {-1, +1};
-    int anterior[2] = {!BOTAO_ATIVO, !BOTAO_ATIVO};
-
-    for (int i = 0; i < 2; i++) {
-        gpio_config_t c = {
-            .pin_bit_mask = 1ULL << pinos[i],
-            .mode = GPIO_MODE_INPUT,
-            .pull_up_en = GPIO_PULLUP_ENABLE,
-            .pull_down_en = GPIO_PULLDOWN_DISABLE,
-            .intr_type = GPIO_INTR_DISABLE,
-        };
-        gpio_config(&c);
-    }
-
-    while (1) {
-        for (int i = 0; i < 2; i++) {
-            int nivel = gpio_get_level(pinos[i]);
-            /* Age na BORDA de descida, nao no nivel: senao segurar o botao
-             * viraria uma enxurrada de trocas de tela a 25 por segundo. */
-            if (nivel == BOTAO_ATIVO && anterior[i] != BOTAO_ATIVO) {
-                ui_swipe(direcao[i]);
-            }
-            anterior[i] = nivel;
-        }
-        /* 40ms: acima da trepidacao mecanica do contato e bem abaixo do que
-         * um dedo percebe como atraso. */
-        vTaskDelay(pdMS_TO_TICKS(40));
-    }
-}
-#endif
 
 static void tarefa_orientacao(void *arg)
 {
@@ -604,26 +528,24 @@ static void tarefa_orientacao(void *arg)
                 if (fabsf(x) > LIMIAR)
                     nova = (x < 0) ? LV_DISPLAY_ROTATION_0 : LV_DISPLAY_ROTATION_180;
             } else {
-                if (fabsf(y) > LIMIAR)
-#if CONFIG_IDF_TARGET_ESP32C6
-                    /* SINAL DE Y OPOSTO AO DA S3 — a IMU não está montada na
-                     * mesma orientação nas duas placas (o QMI8658 é o mesmo
-                     * chip, o que muda é como ele deitou no PCB).
-                     *
-                     * O sintoma é específico e vale como assinatura: em pé e
-                     * de cabeça para baixo a tela acerta, e nas DUAS posições
-                     * de lado ela aparece invertida 180 graus. É o que se vê
-                     * quando 90 e 270 estão trocados entre si, porque um é o
-                     * outro mais meia volta — e é diferente de uma imagem
-                     * espelhada, que nenhuma rotação corrigiria.
-                     *
-                     * Medido do lado do usuário, girando a placa na mão: pela
-                     * serial não dá, porque girar mexe no cabo USB que carrega
-                     * o log (a mesma limitação que o autor registra acima). */
-                    nova = (y < 0) ? LV_DISPLAY_ROTATION_90 : LV_DISPLAY_ROTATION_270;
-#else
-                    nova = (y < 0) ? LV_DISPLAY_ROTATION_270 : LV_DISPLAY_ROTATION_90;
-#endif
+                /* QUAL lado e 90 e qual e 270 depende de como a IMU esta
+                 * montada na placa — BOARD_IMU_Y_INVERTE, em board.h. O mesmo
+                 * QMI8658 deitou de formas diferentes nas duas, e o eixo Y sai
+                 * com sinal oposto.
+                 *
+                 * A assinatura de errar isto e especifica e vale como
+                 * diagnostico: em pe e de cabeca para baixo a tela acerta, e nas
+                 * DUAS posicoes de lado ela aparece invertida 180 graus — porque
+                 * 90 e 270 trocados entre si e um o outro mais meia volta. Isso
+                 * e diferente de imagem espelhada, que nenhuma rotacao corrige.
+                 *
+                 * Medido com a placa na mao: pela serial nao da, porque girar
+                 * mexe no cabo USB que carrega o log. */
+                if (fabsf(y) > LIMIAR) {
+                    nova = (y < 0)
+                        ? (BOARD_IMU_Y_INVERTE ? LV_DISPLAY_ROTATION_90 : LV_DISPLAY_ROTATION_270)
+                        : (BOARD_IMU_Y_INVERTE ? LV_DISPLAY_ROTATION_270 : LV_DISPLAY_ROTATION_90);
+                }
             }
 
             /* PRIMEIRA leitura válida: aplica na hora, sem histerese.

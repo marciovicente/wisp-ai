@@ -385,25 +385,20 @@ typedef struct { int16_t d, x, y; const lv_font_t *f_det, *f_proj; } vaga_t;
 static void vaga_de(int total, int i, vaga_t *v)
 {
     if (total <= 1) {
-#if CONFIG_IDF_TARGET_ESP32C6
-        /* 306 = os 236 da S3 mais 30%, e a arte da pasta assets_c6 tem
-         * exatamente esse tamanho — o objeto da foto recebe v.d como tamanho,
-         * e imagem maior que o objeto sai CORTADA, nao reduzida. Os dois numeros
-         * andam juntos: mexer em um sem o outro corta o mascote ou deixa moldura
-         * vazia em volta dele.
+        /* 306px, e a conta vertical fecha justa — por isso esta escrita.
          *
-         * Sobe para y=-50 (era -12) porque a lista de sessoes abaixo do rotulo
-         * cresceu: com o mascote centrado, a quarta linha cairia fora da tela.
+         * A arte em assets/ tem exatamente esse tamanho, e os dois numeros andam
+         * juntos: o objeto da foto recebe v.d como tamanho, e imagem MAIOR que o
+         * objeto sai CORTADA, nao reduzida. Mexer em um sem o outro corta o
+         * mascote ou deixa moldura vazia em volta dele.
          *
-         * A conta vertical fecha justa e por isso esta escrita: mascote de 306
-         * centrado em 190 ocupa 37..343, o detalhe fica em 369 e a lista comeca
-         * em 395 — quatro linhas de 19 terminam em 471, com 9px de sobra. Os
-         * 37px de folga no topo sao deliberados: a moldura come a beirada do
-         * vidro, mais ainda nos cantos arredondados. */
+         * Centrado em 190 (y=-50) ocupa 37..343; o detalhe cai em 369 e a lista
+         * de sessoes comeca em 395 — quatro linhas de 19 terminam em 471, com 9px
+         * de sobra. Os 37px de folga no topo sao deliberados: a moldura come a
+         * beirada do vidro, mais ainda nos cantos arredondados.
+         *
+         * Vale para as duas placas: a tela e a mesma 480x480 nas duas. */
         *v = (vaga_t){306, 0, -50, &lv_font_montserrat_32, &lv_font_montserrat_20};
-#else
-        *v = (vaga_t){236, 0, -12, &lv_font_montserrat_32, &lv_font_montserrat_20};
-#endif
     } else if (total == 2) {
         *v = (vaga_t){178, (i == 0 ? -118 : 118), -10,
                       &lv_font_montserrat_24, &lv_font_montserrat_16};
@@ -497,26 +492,22 @@ static void aplicar_layout(int total)
 
         lv_obj_set_style_text_font(m->detail, v.f_det, 0);
         lv_obj_align(m->detail, LV_ALIGN_CENTER, v.x, v.y + v.d / 2 + 26);
-#if CONFIG_IDF_TARGET_ESP32C6
-        /* O rotulo de projeto virou LISTA: uma linha por sessao, ate quatro.
+        /* O rotulo de projeto e uma LISTA: uma linha por sessao, ate quatro.
          *
          * Ancorada pelo TOPO, nao pelo centro. Com LV_ALIGN_CENTER um label que
-         * cresce se abre para os dois lados, e a primeira linha sobe ate
-         * encostar no detalhe. Do topo, a lista cresce para baixo, que e onde
-         * sobra espaco.
+         * cresce se abre para os dois lados, e a primeira linha sobe ate encostar
+         * no detalhe. Do topo, a lista cresce para baixo, que e onde sobra
+         * espaco.
          *
          * A fonte comeca em 24 e quem manda nela e a QUANTIDADE de sessoes, no
-         * update — ver a nota lá. Aqui fica o caso de uma sessao, que e o comum. */
+         * update — ver a nota la. Aqui fica o caso de uma sessao, que e o comum.
+         *
+         * line_space -1 comprime as linhas de 20 para 19px. Parece detalhe e e o
+         * que garante a quarta linha dentro da tela. */
         lv_obj_set_style_text_font(m->project, &lv_font_montserrat_24, 0);
         lv_obj_set_style_text_align(m->project, LV_TEXT_ALIGN_CENTER, 0);
-        /* line_space -1 comprime as linhas de 20 para 19px. Parece detalhe e e
-         * o que garante a quarta linha dentro da tela. */
         lv_obj_set_style_text_line_space(m->project, -1, 0);
         lv_obj_align(m->project, LV_ALIGN_TOP_MID, v.x, 240 + v.y + v.d / 2 + 52);
-#else
-        lv_obj_set_style_text_font(m->project, v.f_proj, 0);
-        lv_obj_align(m->project, LV_ALIGN_CENTER, v.x, v.y + v.d / 2 + 54);
-#endif
 
         m->p_alt = -1;   /* força reposicionar os olhos na nova escala */
     }
@@ -1236,10 +1227,8 @@ void ui_update(const wisp_data_t *d)
      * quatro caras identicas em miniatura — nenhuma legivel de longe, que
      * e a unica coisa que esta tela precisa fazer.
      *
-     * A sessao mais urgente aparece, e o rodape diz quantas outras
-     * existem. Mesma decisao do flutuante no Mac, pelo mesmo motivo. */
-    int outras = n - 1;
-    if (outras < 0) outras = 0;
+     * A sessao mais urgente e quem aparece; a lista abaixo do rotulo nomeia
+     * TODAS as que estao rodando. Mesma decisao do flutuante no Mac. */
     n = 1;
 
     bsp_display_lock(-1);
@@ -1352,7 +1341,6 @@ void ui_update(const wisp_data_t *d)
                 snprintf(m->ult_detalhe, sizeof(m->ult_detalhe), "%s", txt);
                 lv_label_set_text(m->detail, txt);
             }
-#if CONFIG_IDF_TARGET_ESP32C6
             /* TODAS as sessoes, uma por linha, em vez de "projeto  +N".
              *
              * O "+N" dizia QUANTAS outras existiam e nunca QUAIS — e saber
@@ -1416,19 +1404,6 @@ void ui_update(const wisp_data_t *d)
                 snprintf(ult_lista, sizeof(ult_lista), "%s", lista);
                 lv_label_set_text(m->project, lista);
             }
-            (void) outras;
-#else
-            /* %.19s: o limite tem que ser EXPLICITO. Sem a precisao, o gcc
-             * so ve dois campos de tamanho aberto indo para o mesmo buffer e
-             * recusa com format-truncation, que aqui e erro. */
-            char pj[28];
-            if (outras > 0) snprintf(pj, sizeof(pj), "%.19s  +%d", s->project, outras);
-            else            snprintf(pj, sizeof(pj), "%.27s", s->project);
-            if (strncmp(pj, m->ult_projeto, sizeof(m->ult_projeto)) != 0) {
-                snprintf(m->ult_projeto, sizeof(m->ult_projeto), "%s", pj);
-                lv_label_set_text(m->project, pj);
-            }
-#endif
         }
     } else {
         char tmp[36];

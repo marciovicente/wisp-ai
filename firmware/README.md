@@ -171,10 +171,29 @@ the sh8601 driver, and it works — but it answers `ESP_ERR_NOT_SUPPORTED` to
 byte for byte, MADCTL base `0xA0` included — which matters, because
 `aplicar_rotacao()` is calibrated against exactly that value.
 
-**Two `#if` in main.c beyond the buffer**: the LVGL task stack cannot ask for
-PSRAM, and the buttons move to GPIO 9 (BOOT) and 18 (KEY). GPIO 0, the left
-button on the S3, is the display's QSPI clock on the C6 — configuring it as an
-input would fight the panel.
+**Buttons move, and one of them is not a GPIO.** GPIO 0 — the left button on
+the S3 — is the display's QSPI clock on the C6, and GPIO 16 is the IMU's INT1,
+so neither could be reused. This board has BOOT on 9 and KEY on **GPIO 10**;
+every source, including Waveshare's own example config, says GPIO 18, where no
+button exists. And the middle button is the PWR, wired to the AXP2101's PWRON
+pin: it arrives as an interrupt bit in the PMIC, with no GPIO to read at all.
+
+### board.h
+
+Board differences live in `main/board.h` and nowhere else: pins, memory, how a
+sensor is mounted. `main.c` and `ui.c` have no `#if CONFIG_IDF_TARGET_*` in
+them.
+
+That split exists for a reason beyond tidiness. The two boards share the same
+480x480 panel, so nothing about the interface depends on the chip — but while
+each difference lived where it showed up, interface changes kept getting tied
+to a target, and the same improvement had to be made twice or existed on only
+one board. Layout, fonts and colours are common code; only hardware facts are
+per-board.
+
+Reading the middle button is the one behavioural difference the header carries,
+through `BOARD_BTN_MEIO_VIA_PMIC`: three GPIOs on the S3 (the middle one at
+inverted polarity — it rests at 0 and rises), an interrupt bit on the C6.
 
 ### Editing sdkconfig
 

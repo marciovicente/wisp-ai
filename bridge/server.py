@@ -372,9 +372,14 @@ class State:
         lim = self.subscription_limits()
         if lim.get("ok"):
             snap["lim"] = [
+                # "e" is the average-pace mark, 0-100, or -1 for "do not
+                # draw one" — the same unknown-sentinel the firmware already
+                # uses for limits_age_s, so a missing key and an unknowable
+                # value land on the identical code path there.
                 {"l": b["label"], "p": b["pct"], "r": b["resets_in"],
                  "s": b["severity"], "a": b["active"],
-                 "x": bool(b.get("expired"))}
+                 "x": bool(b.get("expired")),
+                 "e": b["elapsed_pct"] if b.get("elapsed_pct") is not None else -1}
                 for b in lim["bars"]
             ]
             snap["lim_age"] = lim["age_s"]

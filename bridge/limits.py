@@ -21,7 +21,7 @@ the screen can say "X min ago" instead of pretending the number is live.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 CONFIG = Path.home() / ".claude.json"
@@ -43,12 +43,51 @@ LABELS = {
     "weekly_scoped": "Weekly (model)",
 }
 
+# kind -> how long the window lasts, in seconds.
+#
+# The payload says WHEN a window resets, never how long it is, so the length has
+# to live here to turn "resets at 16:20" into "40% of the way through". A kind
+# missing from this table simply gets no pace mark: an absent mark costs the
+# reader nothing, while one drawn against a guessed length is a lie with a
+# pixel-perfect finish.
+WINDOW_SECONDS = {
+    "session": 5 * 3600,
+    "weekly_all": 7 * 86400,
+    "weekly_scoped": 7 * 86400,
+}
+
 # severity -> suggested colour (RGB565-friendly)
 SEVERITY_COLOR = {
     "normal": "#5FCF8E",
     "warning": "#E8C15A",
     "critical": "#E8624A",
 }
+
+
+def _elapsed_pct(iso: str | None, kind: str, measured_at: datetime) -> int | None:
+    """How much of the window was already spent, 0-100, or None if unknowable.
+
+    `measured_at` is the instant the percentage was READ, not the instant we are
+    drawing. Those differ by `age_s` whenever the source is the on-disk cache,
+    and using "now" here would be the same class of bug this module already
+    guards against: the mark would keep advancing while the frozen percentage
+    stood still, so an old cache would render as "far under pace" — a wrong
+    reading produced entirely by the data being old, which is exactly the shape
+    of wrongness nobody notices.
+    """
+    window = WINDOW_SECONDS.get(kind)
+    if not window or not iso:
+        return None
+    try:
+        reset = datetime.fromisoformat(iso)
+    except ValueError:
+        return None
+    remaining = (reset - measured_at).total_seconds()
+    # Past its reset, or further out than the window can reach: in both cases
+    # this window cannot describe the number, so there is nothing to mark.
+    if remaining <= 0 or remaining > window:
+        return None
+    return int(round((window - remaining) / window * 100))
 
 
 def _fmt_reset(iso: str | None, now: datetime) -> str:
@@ -177,6 +216,10 @@ def normalize(utilization, age_s: int) -> dict:
                 break
 
     now = datetime.now(timezone.utc)
+    # The moment the numbers below were true. For a live fetch it is ~now; for
+    # the disk cache it can be hours back, and the pace mark has to be pinned
+    # to it (see _elapsed_pct).
+    measured_at = now - timedelta(seconds=max(0, age_s))
     raw = (utilization or {}).get("limits") or []
     bars = []
     for item in raw:
@@ -190,11 +233,22 @@ def normalize(utilization, age_s: int) -> dict:
         scope = item.get("scope") or {}
         if name := ((scope.get("model") or {}).get("display_name")):
             label = f"Weekly {name}"
+        resets_in = _fmt_reset(item.get("resets_at"), now)
+        expired = resets_in == "now"
         bars.append({
             "kind": kind,
             "label": label,
             "pct": int(pct),
-            "resets_in": _fmt_reset(item.get("resets_at"), now),
+            "resets_in": resets_in,
+            # Where the average-pace mark goes on the bar, or None for no mark.
+            #
+            # Gated on `expired` below, and not only on the arithmetic: a cache
+            # read 10 minutes ago can describe a window that had 8 minutes left
+            # AT THE TIME, which is a truthful 97% and still the wrong thing to
+            # draw. The card already declares that number untrustworthy, and a
+            # pace mark on it would invite exactly the comparison the flag says
+            # not to make.
+            "elapsed_pct": None if expired else _elapsed_pct(item.get("resets_at"), kind, measured_at),
             # EXPIRED window: the reset time has already passed, so this
             # percentage describes a period that no longer exists. It only
             # happens with cached data — live, a "resets_at" in the past would
@@ -204,7 +258,7 @@ def normalize(utilization, age_s: int) -> dict:
             # WRONG in a predictable direction. After a reset the real usage
             # drops, so an expired "52%" alarms you for nothing. Better to say
             # we do not know than to say a number we know is wrong.
-            "expired": _fmt_reset(item.get("resets_at"), now) == "now",
+            "expired": expired,
             "severity": sev,
             "color": SEVERITY_COLOR.get(sev, SEVERITY_COLOR["normal"]),
             "active": bool(item.get("is_active")),

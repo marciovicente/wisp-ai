@@ -243,6 +243,8 @@ static lv_obj_t *g_telas[2];
 #define QTD_TELAS ((int) (sizeof(g_telas) / sizeof(g_telas[0])))
 static lv_obj_t *g_bar_rotulo[MAX_BARRAS], *g_bar_pct[MAX_BARRAS];
 static lv_obj_t *g_bar[MAX_BARRAS], *g_bar_reset[MAX_BARRAS];
+static lv_obj_t *g_bar_ritmo[MAX_BARRAS];   /* veu de ritmo medio sobre a barra */
+static lv_obj_t *g_bar_marca[MAX_BARRAS];   /* par de tiques na ponta do veu */
 static lv_obj_t *g_card[MAX_BARRAS];
 static lv_obj_t *g_frescor;
 
@@ -258,6 +260,7 @@ static lv_obj_t *g_frescor;
 #define CARD_GAP_MIN 8
 #define CARD_PAD  14
 #define BARRA_A   14    /* era 8: a barra e o que se le de longe */
+#define RITMO_TIQUE_L 2 /* largura do tique opaco na ponta do veu de ritmo */
 #define PAINEL_Y0 46    /* primeira linha util, logo abaixo do titulo */
 #define PAINEL_Y1 440   /* ultima linha util com rodape na tela */
 #define PAINEL_Y1_CHEIO 466  /* ate onde vai quando o rodape sai de cena */
@@ -830,6 +833,36 @@ static void posicionar_cards(int quantos)
     }
 }
 
+/* Estica o veu por `pct` da trilha e encosta a marca na ponta dele.
+ *
+ * Esconde os dois quando nao ha marca (-1, que o bridge manda para janela
+ * expirada ou sem tamanho conhecido) e quando a marca nao chega a um tique de
+ * largura — ali o "veu" seria so o tique sentado na ponta arredondada da barra.
+ *
+ * A marca comeca um tique ANTES da borda do veu, para o branco cair sobre o
+ * veu e o preto imediatamente fora dele. Perto de 100% o preto sai da trilha e
+ * o LVGL o recorta; o branco, que e o que marca a posicao, continua visivel. */
+static void posicionar_ritmo(lv_obj_t *veu, lv_obj_t *marca, int pct)
+{
+    if (!veu || !marca) return;
+    if (pct < 0 || pct > 100) {
+        lv_obj_add_flag(veu, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(marca, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    const int trilha = CARD_L - 2 * CARD_PAD;
+    const int l = (trilha * pct + 50) / 100;
+    if (l < RITMO_TIQUE_L) {
+        lv_obj_add_flag(veu, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(marca, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    lv_obj_set_width(veu, l);
+    lv_obj_set_pos(marca, l - RITMO_TIQUE_L, 0);
+    lv_obj_remove_flag(veu, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(marca, LV_OBJ_FLAG_HIDDEN);
+}
+
 static void criar_painel(lv_obj_t *pai)
 {
     lv_obj_t *titulo = lv_label_create(pai);
@@ -888,6 +921,68 @@ static void criar_painel(lv_obj_t *pai)
         lv_obj_set_style_radius(g_bar[i], BARRA_A / 2, 0);
         lv_obj_set_style_radius(g_bar[i], BARRA_A / 2, LV_PART_INDICATOR);
         so_decoracao(g_bar[i]);
+
+        /* O VEU DE RITMO.
+         *
+         * Termina onde o preenchimento estaria se a janela tivesse sido gasta
+         * em ritmo constante. Le-se um contra o outro: veu sobrando a direita
+         * do preenchimento e folga, cor saturada sobrando a direita do veu e
+         * excesso. Só um dos dois pode existir por vez.
+         *
+         * Deliberadamente neutro, e nao vermelho: o cor_do_pct ja gasta o
+         * vermelho no preenchimento acima de 80%, e o ritmo medio e uma
+         * referencia, nao um alerta.
+         *
+         * O clip_corner e obrigatorio — a barra tem raio BARRA_A/2, ou seja e
+         * uma pilula, e sem ele os cantos quadrados do veu vazariam para fora
+         * das pontas. Arredondar o veu seria pior: amaciaria justamente a borda
+         * direita que carrega a leitura. */
+        lv_obj_set_style_clip_corner(g_bar[i], true, LV_PART_MAIN);
+        g_bar_ritmo[i] = lv_obj_create(g_bar[i]);
+        lv_obj_set_pos(g_bar_ritmo[i], 0, 0);
+        lv_obj_set_size(g_bar_ritmo[i], 0, LV_PCT(100));
+        lv_obj_set_style_bg_color(g_bar_ritmo[i], lv_color_make(238, 242, 248), 0);
+        lv_obj_set_style_bg_opa(g_bar_ritmo[i], LV_OPA_20, 0);
+        lv_obj_set_style_radius(g_bar_ritmo[i], 0, 0);
+        lv_obj_set_style_border_width(g_bar_ritmo[i], 0, 0);
+        lv_obj_set_style_pad_all(g_bar_ritmo[i], 0, 0);
+        lv_obj_add_flag(g_bar_ritmo[i], LV_OBJ_FLAG_HIDDEN);
+        so_decoracao(g_bar_ritmo[i]);
+
+        /* A MARCA: dois tiques da mesma largura e altura, branco e preto,
+         * lado a lado na ponta do veu. A area do veu da a magnitude, a marca da
+         * o ponto exato.
+         *
+         * O preto existe porque o branco sozinho DESAPARECE sobre os
+         * preenchimentos claros que o cor_do_pct produz na faixa amarela. Duas
+         * tintas opostas encostadas garantem que uma das duas contraste com o
+         * que estiver embaixo, qualquer que seja.
+         *
+         * E um objeto preto de largura dupla com o branco alinhado a esquerda
+         * dentro dele, e nao dois objetos posicionados: assim o par anda com
+         * uma conta so, e o branco fica colado no preto por construcao.
+         *
+         * Irmao do veu e nao filho: o preto cai FORA da largura do veu, e o
+         * LVGL recorta filho a area do pai (e o que o LV_OBJ_FLAG_OVERFLOW_VISIBLE
+         * existe para desligar), entao dentro do veu ele nunca apareceria. */
+        g_bar_marca[i] = lv_obj_create(g_bar[i]);
+        lv_obj_set_size(g_bar_marca[i], 2 * RITMO_TIQUE_L, LV_PCT(100));
+        lv_obj_set_style_bg_color(g_bar_marca[i], lv_color_make(0, 0, 0), 0);
+        lv_obj_set_style_bg_opa(g_bar_marca[i], LV_OPA_COVER, 0);
+        lv_obj_set_style_radius(g_bar_marca[i], 0, 0);
+        lv_obj_set_style_border_width(g_bar_marca[i], 0, 0);
+        lv_obj_set_style_pad_all(g_bar_marca[i], 0, 0);
+        lv_obj_add_flag(g_bar_marca[i], LV_OBJ_FLAG_HIDDEN);
+        so_decoracao(g_bar_marca[i]);
+
+        lv_obj_t *tique = lv_obj_create(g_bar_marca[i]);
+        lv_obj_set_size(tique, RITMO_TIQUE_L, LV_PCT(100));
+        lv_obj_align(tique, LV_ALIGN_LEFT_MID, 0, 0);
+        lv_obj_set_style_bg_color(tique, lv_color_make(238, 242, 248), 0);
+        lv_obj_set_style_bg_opa(tique, LV_OPA_COVER, 0);
+        lv_obj_set_style_radius(tique, 0, 0);
+        lv_obj_set_style_border_width(tique, 0, 0);
+        so_decoracao(tique);
 
         g_bar_reset[i] = lv_label_create(card);
         lv_obj_set_style_text_font(g_bar_reset[i], &lv_font_montserrat_20, 0);
@@ -1511,6 +1606,7 @@ void ui_update(const wisp_data_t *d)
 
             lv_bar_set_value(g_bar[i], b->pct, LV_ANIM_OFF);
             lv_obj_set_style_bg_color(g_bar[i], cor_do_pct(b->pct), LV_PART_INDICATOR);
+            posicionar_ritmo(g_bar_ritmo[i], g_bar_marca[i], b->elapsed_pct);
 
             if (b->resets_in[0]) {
                 snprintf(tmp, sizeof(tmp), "resets in %s", b->resets_in);

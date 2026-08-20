@@ -853,6 +853,11 @@ static bool interpretar(const char *json, wisp_data_t *d)
         const cJSON *p = cJSON_GetObjectItemCaseSensitive(it, "p");
         b->pct = cJSON_IsNumber(p) ? p->valueint : 0;
         b->active = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(it, "a"));
+        /* O bridge manda -1 quando nao ha marca a desenhar (janela expirada,
+         * kind sem tamanho conhecido, reset ja passado). Chave ausente cai no
+         * mesmo -1, entao um bridge antigo simplesmente nao mostra a marca. */
+        const cJSON *e = cJSON_GetObjectItemCaseSensitive(it, "e");
+        b->elapsed_pct = cJSON_IsNumber(e) ? e->valueint : -1;
         d->limit_count++;
     }
 

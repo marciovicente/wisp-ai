@@ -29,6 +29,7 @@ typedef struct {
     char  resets_in[8];
     char  severity[10];
     bool  active;
+    int   elapsed_pct;   /* marca de ritmo medio, 0-100; -1 = nao desenhar */
 } wisp_limit_t;
 
 /* How many Claude sessions fit on screen at once. Beyond that the mascots

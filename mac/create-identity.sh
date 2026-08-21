@@ -42,7 +42,15 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
 # with "MAC verification failed ... (wrong password?)" — a message that points
 # at the wrong thing: the problem is the empty-password bundle, not the
 # password. It protects a temporary file that dies at the end of this script.
-openssl pkcs12 -export -out "$TMP/id.p12" -inkey "$TMP/k.pem" -in "$TMP/c.pem" \
+#
+# And the SAME misleading message comes back, with the right password, when
+# openssl is a 3.x (Homebrew's, first in PATH here): it defaults to a SHA-256
+# MAC and AES-based PBES2, which the macOS Security.framework does not read.
+# The three algorithm flags pin the bundle to what the keychain accepts. They
+# are understood by both openssl 3.x and the LibreSSL in /usr/bin, so this
+# works whichever one the PATH happens to point at.
+openssl pkcs12 -export -macalg sha1 -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES \
+    -out "$TMP/id.p12" -inkey "$TMP/k.pem" -in "$TMP/c.pem" \
     -name "$NAME" -passout pass:wisp 2>/dev/null
 chmod 600 "$TMP"/*
 

@@ -41,6 +41,7 @@ static const char *TAG = "wisp";
 #define PORTA_BRIDGE  4666
 #define INTERVALO_MS  600      /* pausa entre consultas ao /state */
 #define RESP_MAX      2048     /* /state mede ~290 bytes; folga de 7x */
+#define TAM_PILHA_REDE 6144    /* o que sempre foi; ver o log de high-water mark */
 
 static EventGroupHandle_t s_eventos;
 #define BIT_CONECTADO BIT0
@@ -958,10 +959,11 @@ static void tarefa_rede(void *arg)
          * DMA do display. Reportar periodicamente para flagrar vazamento ou
          * aperto antes que vire "Draw bitmap failed". */
         if (++voltas % 25 == 0) {
-            ESP_LOGI(TAG, "interna livre: %u (mín histórico %u) | PSRAM: %u",
+            ESP_LOGI(TAG, "interna livre: %u (mín histórico %u) | PSRAM: %u | pilha rede sobrando: %u",
                      (unsigned) heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                      (unsigned) heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
-                     (unsigned) heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+                     (unsigned) heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                     (unsigned) uxTaskGetStackHighWaterMark(NULL));
         }
 
         vTaskDelay(pdMS_TO_TICKS(INTERVALO_MS));
@@ -1039,7 +1041,21 @@ void app_main(void)
         snprintf(s_dados.sessions[0].detail, sizeof(s_dados.sessions[0].detail), "connecting");
         ui_update(&s_dados);
         ESP_ERROR_CHECK(mdns_init());
-        xTaskCreate(tarefa_rede, "rede", 6144, NULL, 5, NULL);
+        /* O RETORNO, que ate agora era ignorado.
+         *
+         * A pilha sai da RAM INTERNA, que e o recurso disputado desta placa, e
+         * quando nao cabe o xTaskCreate simplesmente devolve pdFAIL: nao ha
+         * panico, nao ha log, a task nao existe. A tela fica em "connecting"
+         * para sempre e a placa parece um problema de rede — foi exatamente
+         * assim que isto se apresentou. Uma falha que nao se anuncia custa uma
+         * sessao de debug; uma linha aqui custa nada. */
+        if (xTaskCreate(tarefa_rede, "rede", TAM_PILHA_REDE, NULL, 5, NULL) != pdPASS) {
+            ESP_LOGE(TAG, "sem RAM interna para a task de rede (%u livres)",
+                     (unsigned) heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+            snprintf(s_dados.sessions[0].detail, sizeof(s_dados.sessions[0].detail),
+                     "out of memory");
+            ui_update(&s_dados);
+        }
     }
 
     ESP_LOGI(TAG, "PSRAM livre: %u | RAM interna: %u",

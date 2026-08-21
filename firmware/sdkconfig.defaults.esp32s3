@@ -22,6 +22,24 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 # Pushing the network buffers into PSRAM gives internal back to the display.
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 
+# —— Onde moram os objetos do LVGL ——
+#
+# Com LV_USE_CLIB_MALLOC, cada objeto do LVGL sai do malloc comum, e o padrao
+# manda TODA alocacao menor que 16KB para a RAM interna. Objeto de interface e
+# sempre menor que isso, entao o painel inteiro se aloja no recurso mais escasso
+# da placa — e o painel de cartoes tem varias vezes mais objetos que o desenho
+# anterior.
+#
+# Medido: com o padrao, a interna livre no fim do boot caiu para 7,6KB e a task
+# de rede (6KB de pilha) simplesmente nao era criada. O xTaskCreate devolve
+# pdFAIL em silencio, entao a placa ficava em "connecting" para sempre e parecia
+# problema de WiFi.
+#
+# 512 bytes deixa as alocacoes miudas na interna e manda a arvore de objetos
+# para a PSRAM, que e onde ha 6,5MB sobrando. Nao vale para a C6: la nao existe
+# PSRAM e a opcao nem existe no Kconfig.
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=512
+
 # TRIED AND REVERTED: touching SPIRAM_MALLOC_RESERVE_INTERNAL /
 # ALWAYSINTERNAL made it worse (free internal at boot dropped from 26KB to
 # 7.7KB). The cause was not allocation policy: SPI allocates a bounce buffer
